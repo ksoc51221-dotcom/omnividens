@@ -7,7 +7,8 @@ and add it to `ALL_ADAPTERS` in `registry.py`.
 
 import re
 import subprocess
-import tomllib
+import os
+import signal
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,7 +16,6 @@ from typing import Callable
 
 from reelay.core.types import Instruction
 
-CONFIG_PATH = Path.home() / ".reelay" / "config"
 DEFAULT_TIMEOUT_S = 600
 
 # A runner takes (argv, cwd, stdin_text, timeout) and returns a CompletedProcess.
@@ -47,17 +47,19 @@ class Adapter(ABC):
 
 
 def subprocess_runner(argv: list[str], cwd: Path, stdin_text: str, timeout: int) -> subprocess.CompletedProcess:
-    return subprocess.run(argv, cwd=cwd, input=stdin_text, capture_output=True,
-                          text=True, timeout=timeout)
-
-
-def load_config(path: Path | None = None) -> dict:
-    """Read ~/.reelay/config (TOML). Missing or broken file -> empty config."""
+    """Run argv in its own process group; on timeout kill the whole group."""
+    proc = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, start_new_session=True)
     try:
-        with open(path or CONFIG_PATH, "rb") as f:
-            return tomllib.load(f)
-    except (OSError, tomllib.TOMLDecodeError):
-        return {}
+        out, err = proc.communicate(stdin_text, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        proc.communicate()
+        raise
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
 
 
 def check_project(project: Path | None, config: dict) -> Path:
@@ -69,6 +71,9 @@ def check_project(project: Path | None, config: dict) -> Path:
     if project is None:
         raise ValueError("no project folder given")
     allowed = [Path(p).expanduser().resolve() for p in config.get("allowed_projects", [])]
+    too_wide = {Path("/").resolve(), Path.home().resolve()}
+    if any(a in too_wide for a in allowed):
+        raise ValueError("allowed_projects may not contain / or your whole home folder")
     if not allowed:
         raise ValueError("no allowed_projects set in ~/.reelay/config")
     target = Path(project).expanduser().resolve()  # resolves symlinks and ..

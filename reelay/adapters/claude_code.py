@@ -10,10 +10,11 @@ import shutil
 import subprocess
 import time
 
+from reelay.core.config import ConfigError, load_config
 from reelay.core.types import Instruction
 
 from .base import (DEFAULT_TIMEOUT_S, Adapter, AdapterResult, Runner, check_name,
-                   check_project, load_config, subprocess_runner)
+                   check_project, subprocess_runner)
 
 EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 # "bypassPermissions" and "auto" are deliberately absent: config can't enable them.
@@ -51,6 +52,8 @@ class ClaudeCodeAdapter(Adapter):
         argv = [self._binary or shutil.which("claude") or "claude", "-p",
                 "--output-format", "json", "--permission-mode", mode,
                 "--no-session-persistence"]
+        if config.get("max_budget_usd"):
+            argv += ["--max-budget-usd", str(float(config["max_budget_usd"]))]
         if model:
             argv += ["--model", model]
         if instruction.effort:
@@ -58,7 +61,10 @@ class ClaudeCodeAdapter(Adapter):
         return argv, (f"/{skill} {task}" if skill else task)
 
     def run(self, instruction: Instruction) -> AdapterResult:
-        config = self._config if self._config is not None else load_config()
+        try:
+            config = self._config if self._config is not None else load_config()
+        except ConfigError as e:
+            return AdapterResult(ok=False, error=f"refused: {e}")
         try:
             project = check_project(instruction.project, config)
             argv, stdin_text = self.build_argv(instruction, config)
@@ -80,12 +86,17 @@ class ClaudeCodeAdapter(Adapter):
         try:
             data = json.loads(proc.stdout)
         except (json.JSONDecodeError, TypeError):
+            data = None
+        if not isinstance(data, dict):
             return AdapterResult(ok=False, seconds=seconds,
-                                 error=(proc.stderr or proc.stdout or "no output")[:500])
-        usage = data.get("usage") or {}
-        tokens = sum(int(usage.get(k) or 0) for k in
-                     ("input_tokens", "output_tokens",
-                      "cache_creation_input_tokens", "cache_read_input_tokens"))
+                                 error=str(proc.stderr or proc.stdout or "no output")[:500])
+        usage = data.get("usage")
+        try:
+            tokens = sum(int(usage.get(k) or 0) for k in
+                         ("input_tokens", "output_tokens",
+                          "cache_creation_input_tokens", "cache_read_input_tokens"))
+        except (ValueError, TypeError, AttributeError):
+            tokens = 0
         failed = proc.returncode != 0 or bool(data.get("is_error"))
         text = str(data.get("result", ""))
         return AdapterResult(ok=not failed, text=text, tokens=tokens, seconds=seconds,

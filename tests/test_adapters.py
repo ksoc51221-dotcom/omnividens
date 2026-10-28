@@ -5,7 +5,8 @@ import subprocess
 from pathlib import Path
 
 from reelay.adapters import Adapter, available_adapters
-from reelay.adapters.base import check_project, load_config
+from reelay.adapters.base import check_project, subprocess_runner
+from reelay.core.config import ConfigError
 from reelay.adapters.claude_code import ClaudeCodeAdapter
 from reelay.core.types import Instruction
 
@@ -124,13 +125,66 @@ def test_failures_reported_not_raised(tmp_path):
     assert not c[0].run(Instruction("hi there", project=c[1])).ok
 
 
-def test_load_config(tmp_path):
-    p = tmp_path / "config"
-    p.write_text('allowed_projects = ["~/code"]\n')
-    assert load_config(p) == {"allowed_projects": ["~/code"]}
-    assert load_config(tmp_path / "missing") == {}
-    p.write_text("not [toml")
-    assert load_config(p) == {}
+def test_broken_shared_config_gives_clean_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("REELAY_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text("telegram_bot_token = 123:abc\n")  # invalid TOML
+    runner = FakeRunner()
+    r = ClaudeCodeAdapter(runner, None, binary="claude").run(Instruction("hi there", project=tmp_path))
+    assert not r.ok and "refused" in r.error and runner.calls == []
+
+
+def test_shared_config_with_token_and_allowlist_works(tmp_path, monkeypatch):
+    monkeypatch.setenv("REELAY_HOME", str(tmp_path))
+    proj = tmp_path / "p"
+    proj.mkdir()
+    (tmp_path / "config.toml").write_text(
+        f'telegram_bot_token = "123:abc"\nallowed_projects = ["{tmp_path}"]\n')
+    r = ClaudeCodeAdapter(FakeRunner(), None, binary="claude").run(Instruction("hi there", project=proj))
+    assert r.ok
+
+
+def test_parse_never_raises(tmp_path):
+    for out in ("[]", '"x"', "null", "5"):
+        a, proj = make(tmp_path, FakeRunner(proc=subprocess.CompletedProcess([], 0, out, "")))
+        assert not a.run(Instruction("hi there", project=proj)).ok
+    odd = subprocess.CompletedProcess([], 0, json.dumps({"result": "ok", "usage": {"input_tokens": "lots"}}), "")
+    a, proj = make(tmp_path, FakeRunner(proc=odd))
+    r = a.run(Instruction("hi there", project=proj))
+    assert r.ok and r.tokens == 0
+    odd2 = subprocess.CompletedProcess([], 0, json.dumps({"result": "ok", "usage": 7}), "")
+    a, proj = make(tmp_path, FakeRunner(proc=odd2))
+    assert a.run(Instruction("hi there", project=proj)).ok
+
+
+def test_too_wide_allowlist_rejected(tmp_path):
+    for bad in ("/", "~"):
+        try:
+            check_project(tmp_path, {"allowed_projects": [bad]})
+            assert False, "should refuse"
+        except ValueError:
+            pass
+
+
+def test_budget_flag_from_config(tmp_path):
+    runner = FakeRunner()
+    a, proj = make(tmp_path, runner, max_budget_usd=0.5)
+    a.run(Instruction("hi there", project=proj))
+    argv = runner.calls[0][0]
+    assert argv[argv.index("--max-budget-usd") + 1] == "0.5"
+
+
+def test_timeout_kills_process_group(tmp_path):
+    marker = tmp_path / "grandchild_alive"
+    # child shell starts a background grandchild that would write the marker after 2s
+    argv = ["sh", "-c", f"(sleep 2; touch {marker}) & sleep 30"]
+    try:
+        subprocess_runner(argv, tmp_path, "", 1)
+        assert False, "should time out"
+    except subprocess.TimeoutExpired:
+        pass
+    import time
+    time.sleep(2.5)
+    assert not marker.exists()
 
 
 def test_registry_lists_only_installed(monkeypatch):
