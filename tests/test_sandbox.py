@@ -247,3 +247,10 @@ def test_trial_model_default_and_override(monkeypatch, tmp_path):
     assert runner.trial_model() == "claude-sonnet-5-5"
     argv = runner.build_argv("claude", {}, runner.trial_model())
     assert argv[argv.index("--model") + 1] == "claude-sonnet-5-5"
+
+
+@pytest.mark.parametrize("bad", ["--dangerously-skip-permissions", "a b", "x;rm", "-m", ""])
+def test_invalid_trial_model_falls_back(monkeypatch, tmp_path, bad):
+    monkeypatch.setenv("REELAY_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text(f'trial_model = "{bad}"\n')
+    assert runner.trial_model() == "claude-haiku-5-5"

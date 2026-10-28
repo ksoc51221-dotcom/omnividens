@@ -1,7 +1,9 @@
 """Step 3-4: run Claude Code headless in an isolated config; measure from its JSON."""
 
 import json
+import logging
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -12,6 +14,7 @@ from typing import Callable
 
 from reelay.core.config import ConfigError, load_config
 
+log = logging.getLogger(__name__)
 SKILL_NAME = "candidate"
 DEFAULT_TRIAL_MODEL = "claude-haiku-5-5"  # cheapest current model; override with trial_model
 TRIAL_PROMPT = (
@@ -79,11 +82,19 @@ def has_api_key() -> bool:
     return find_api_key() is not None
 
 
+_MODEL_OK = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")  # can't start with "-"
+
+
 def trial_model() -> str:
+    """Model from config if it looks like a plain model name, else the Haiku default."""
     try:
-        return str(load_config().get("trial_model") or DEFAULT_TRIAL_MODEL)
+        model = str(load_config().get("trial_model") or DEFAULT_TRIAL_MODEL)
     except ConfigError:
         return DEFAULT_TRIAL_MODEL
+    if not _MODEL_OK.match(model):
+        log.warning("ignoring invalid trial_model %r, using %s", model, DEFAULT_TRIAL_MODEL)
+        return DEFAULT_TRIAL_MODEL
+    return model
 
 
 def build_argv(claude: str, settings: dict, model: str = DEFAULT_TRIAL_MODEL) -> list[str]:
