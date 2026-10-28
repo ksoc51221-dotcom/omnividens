@@ -1,0 +1,4 @@
+Parts of this module (yt-dlp options, WebVTT de-duplication, Groq Whisper call)
+follow the approach of bradautomates/claude-video (MIT License,
+Copyright (c) 2025 bradautomates), via the "watch-video" Claude Code skill.
+Code here is a fresh, simplified rewrite; no files were copied verbatim.
