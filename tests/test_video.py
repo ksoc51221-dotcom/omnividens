@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from reelay.video import DownloadError, FrameError, load_video
+from reelay.video import DownloadError, FrameError, TooLongError, load_video
 from reelay.video import download as dl
 from reelay.video import pipeline
 from reelay.video.frames import plan_times
@@ -104,3 +104,46 @@ def test_garbage_file_is_frame_error(tmp_path):
     bad.write_bytes(b"not a video")
     with pytest.raises(FrameError):
         load_video(bad, tmp_path / "w")
+
+
+@pytest.mark.parametrize("url", [
+    "http://localhost:8000/v", "http://127.0.0.1/v", "http://192.168.1.5/v",
+    "http://10.0.0.2/v", "http://169.254.169.254/latest", "http://[::1]/v",
+])
+def test_private_addresses_rejected_before_ytdlp(url, tmp_path):
+    with pytest.raises(DownloadError, match="local or private"):
+        dl.download(url, tmp_path)
+
+
+def test_public_ip_is_not_private():
+    assert not dl.is_private_host("https://8.8.8.8/v")
+
+
+def test_filtered_download_raises_too_long(tmp_path, monkeypatch):
+    class Proc:
+        returncode, stdout = 0, ""
+        stderr = "video.mp4 does not pass filter (duration<=600), skipping .."
+    monkeypatch.setattr(dl.subprocess, "run", lambda *a, **k: Proc())
+    monkeypatch.setattr(dl, "is_private_host", lambda u: False)
+    with pytest.raises(TooLongError) as err:
+        dl.download("https://example.com/v", tmp_path)
+    assert "too long" in err.value.user_message
+
+
+def test_download_passes_caps_to_ytdlp(tmp_path, monkeypatch):
+    seen = {}
+    def fake(cmd, **k):
+        seen["cmd"] = cmd
+        raise dl.subprocess.TimeoutExpired(cmd, 1)
+    monkeypatch.setattr(dl.subprocess, "run", fake)
+    monkeypatch.setattr(dl, "is_private_host", lambda u: False)
+    with pytest.raises(DownloadError):
+        dl.download("https://example.com/v", tmp_path)
+    assert "200M" in seen["cmd"] and "duration<=600" in seen["cmd"]
+
+
+@needs_ffmpeg
+def test_long_local_file_rejected(clip, tmp_path, monkeypatch):
+    monkeypatch.setattr(pipeline, "MAX_DURATION_S", 3)
+    with pytest.raises(TooLongError):
+        load_video(clip, tmp_path)

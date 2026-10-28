@@ -3,16 +3,20 @@
 Approach adapted from claude-video (MIT), see NOTICE.
 """
 
+import ipaddress
 import json
 import shutil
+import socket
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
-from reelay.video.errors import DownloadError
+from reelay.video.errors import DownloadError, TooLongError
 
 VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".mov", ".m4v"}
+MAX_FILESIZE = "200M"
+MAX_DURATION_S = 600
 
 
 @dataclass
@@ -26,13 +30,32 @@ def is_url(source: str) -> bool:
     return urlparse(source).scheme in ("http", "https")
 
 
+def is_private_host(url: str) -> bool:
+    """True for localhost, private/loopback/link-local IPs, or names that resolve to them."""
+    host = urlparse(url).hostname or ""
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        addrs = [ipaddress.ip_address(host)]
+    except ValueError:
+        try:
+            addrs = [ipaddress.ip_address(info[4][0]) for info in socket.getaddrinfo(host, None)]
+        except (socket.gaierror, ValueError):
+            return False  # unknown name: yt-dlp will fail on its own
+    return any(a.is_private or a.is_loopback or a.is_link_local or a.is_reserved for a in addrs)
+
+
 def download(url: str, out_dir: Path, timeout_s: int = 180) -> Downloaded:
     """Fetch `url` into `out_dir`. Raises DownloadError on any failure."""
     if shutil.which("yt-dlp") is None:
         raise DownloadError("yt-dlp is not installed (brew install yt-dlp)")
+    if is_private_host(url):
+        raise DownloadError("refusing to fetch a local or private address")
     out_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
         "yt-dlp", "--no-playlist", "--ignore-errors", "--no-warnings",
+        "--max-filesize", MAX_FILESIZE,
+        "--match-filter", f"duration<={MAX_DURATION_S}",
         "-f", "bv*[height<=720]+ba/b[height<=720]/bv+ba/b",
         "--merge-output-format", "mp4",
         "--write-info-json", "--write-subs", "--write-auto-subs",
@@ -47,6 +70,9 @@ def download(url: str, out_dir: Path, timeout_s: int = 180) -> Downloaded:
         raise DownloadError(f"download timed out after {timeout_s}s") from exc
     video = _find_video(out_dir)
     if video is None:
+        err = proc.stderr or ""
+        if "does not pass filter" in err or "larger than max-filesize" in err:
+            raise TooLongError(f"video is over {MAX_DURATION_S // 60} min or {MAX_FILESIZE}")
         tail = (proc.stderr or "").strip().splitlines()[-1:] or ["no output"]
         raise DownloadError(f"yt-dlp produced no video: {tail[0]}")
     subs = sorted(out_dir.glob("video*.vtt"))
