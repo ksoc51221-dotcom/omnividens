@@ -227,3 +227,23 @@ def test_no_api_key_means_not_run(monkeypatch, tmp_path):
     monkeypatch.setattr(runner.shutil, "which", lambda n: "/bin/claude")
     res = runner.claude_runner(tmp_path, tmp_path, 5)
     assert not res.ok and "API key" in res.output
+
+
+def test_no_api_key_skips_runner_and_reports_scan_only(monkeypatch, tmp_path):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("REELAY_HOME", str(tmp_path))
+    monkeypatch.setattr(runner, "claude_runner", lambda *a: pytest.fail("must not run"))
+    from reelay.sandbox import trial
+    monkeypatch.setattr(trial, "claude_runner", runner.claude_runner)
+    r = trial.run_trial(CAND, None, fake_fetch, scanner_returning("review"), root=tmp_path)
+    assert not r.ran and r.scan_verdict == "review"
+    assert r.fit.startswith("Scan-only") and "note" in r.logs
+
+
+def test_trial_model_default_and_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("REELAY_HOME", str(tmp_path))
+    assert runner.trial_model() == "claude-haiku-5-5"
+    (tmp_path / "config.toml").write_text('trial_model = "claude-sonnet-5-5"\n')
+    assert runner.trial_model() == "claude-sonnet-5-5"
+    argv = runner.build_argv("claude", {}, runner.trial_model())
+    assert argv[argv.index("--model") + 1] == "claude-sonnet-5-5"

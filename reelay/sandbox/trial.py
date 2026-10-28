@@ -7,7 +7,9 @@ from pathlib import Path
 
 from reelay.core.types import Candidate, TrialReport
 from reelay.sandbox import fetch, safety, scan
-from reelay.sandbox.runner import Runner, claude_runner
+from reelay.sandbox.runner import Runner, claude_runner, has_api_key
+SCAN_ONLY_FIT = "Scan-only: safety scan done, live trial skipped — add an API key to try it for real."
+
 
 def run_trial(
     candidate: Candidate,
@@ -20,17 +22,18 @@ def run_trial(
 ) -> TrialReport:
     """Trial `candidate` and return a report. Never raises for bad candidates."""
     runner = runner or claude_runner
+    can_run = has_api_key() if runner is claude_runner else True
     # mkdtemp makes a private (0700) folder in the system temp dir, away from ~/.reelay.
     run_dir = Path(tempfile.mkdtemp(prefix="reelay-sandbox-", dir=root))
     repo = run_dir / "repo"
     try:
-        return _trial(candidate, runner, fetcher, scanner, timeout_s, run_dir, repo)
+        return _trial(candidate, runner, fetcher, scanner, timeout_s, run_dir, repo, can_run)
     finally:
         if not keep:
             shutil.rmtree(run_dir, ignore_errors=True)
 
 
-def _trial(candidate, runner, fetcher, scanner, timeout_s, run_dir, repo) -> TrialReport:
+def _trial(candidate, runner, fetcher, scanner, timeout_s, run_dir, repo, can_run) -> TrialReport:
     def report(verdict, installed, ran, tokens, seconds, fit, logs) -> TrialReport:
         return TrialReport(candidate, installed, ran, verdict, tokens, seconds, fit, logs)
 
@@ -49,6 +52,9 @@ def _trial(candidate, runner, fetcher, scanner, timeout_s, run_dir, repo) -> Tri
     if verdict == "high":
         return report("high", True, False, 0, 0.0,
                       "Static scan found high-risk patterns, so it was NOT run. Skip unless you audit it.", note)
+
+    if not can_run:
+        return report(verdict, True, False, 0, 0.0, SCAN_ONLY_FIT, note)
 
     try:
         result = runner(repo, run_dir, timeout_s)
