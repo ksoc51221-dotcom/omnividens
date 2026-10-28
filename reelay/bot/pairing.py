@@ -10,7 +10,7 @@ import secrets
 import time
 from pathlib import Path
 
-from reelay.bot.config import reelay_home
+from reelay.core.config import reelay_home
 
 # No 0/O/1/I so codes are easy to read aloud or type.
 _ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"

@@ -7,7 +7,7 @@ import pytest
 from reelay.bot import (
     Incoming, Pairing, ReelayBot, download_failed_reply, message_to_job, report_reply,
 )
-from reelay.bot.config import get_bot_token, load_config
+from reelay.bot.config import get_bot_token
 from reelay.bot.pairing import CODE_TTL_S, MAX_FAILED_ATTEMPTS
 from reelay.core.types import JobKind
 
@@ -108,13 +108,12 @@ def test_download_failed_asks_for_screen_recording():
     assert "screen recording" in download_failed_reply().text
 
 
-def test_config_token(tmp_path):
-    cfg = tmp_path / "config"
-    cfg.write_text("# comment\nTELEGRAM_BOT_TOKEN='abc:123'\n")
-    assert load_config(cfg) == {"TELEGRAM_BOT_TOKEN": "abc:123"}
-    assert get_bot_token(cfg) == "abc:123"
-    with pytest.raises(RuntimeError):
-        get_bot_token(tmp_path / "missing")
+def test_config_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("REELAY_HOME", str(tmp_path))
+    with pytest.raises(RuntimeError, match="config.toml"):
+        get_bot_token()
+    (tmp_path / "config.toml").write_text('telegram_bot_token = "abc:123"\n')
+    assert get_bot_token() == "abc:123"
 
 
 # --- Telegram layer with fake updates (no library, no network) ---
