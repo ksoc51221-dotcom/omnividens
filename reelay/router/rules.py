@@ -9,8 +9,9 @@ EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 SKILL_NAME = re.compile(r"^[A-Za-z0-9][\w.-]{0,63}$")  # never starts with "-": it ends up in a CLI call
 
 _SKILL_A = re.compile(r"\b(?:use|run|with|apply)\s+(?:the\s+)?([\w.-]+)\s+skill\b", re.I)
-_SKILL_B = re.compile(r"\bskill\s*[:=]?\s+([\w.-]+)", re.I)
-_MODEL = re.compile(r"\b(opus|sonnet|haiku|fable)\b", re.I)
+_SKILL_B = re.compile(r"\bskill\s*[:=]\s*([\w.-]+)", re.I)  # needs ":" or "=", so "skill set" is not a skill
+# A model name only counts after a cue ("use opus", "model: haiku", ", opus"), so "write a haiku" is left alone.
+_MODEL = re.compile(r"(?:\b(?:use|using|with|on|model)\s*[:=]?\s*|,\s*)(opus|sonnet|haiku|fable)\b", re.I)
 _EFFORT_A = re.compile(r"\beffort\s*[:=]?\s*(low|medium|high|xhigh|max)\b", re.I)
 _EFFORT_B = re.compile(r"\b(low|medium|high|xhigh|max)\s+effort\b", re.I)
 _PROJECT = re.compile(r"(?:^|\s)((?:~|\.{1,2})?/[\w./~-]+)")
@@ -31,7 +32,7 @@ class Parsed:
 
 
 def _take(pattern: re.Pattern, text: str) -> tuple[str | None, str]:
-    """Return the first capture group (lowercased pattern hit) and the text with the match removed."""
+    """Return the first capture group and the text with the match removed."""
     match = pattern.search(text)
     if not match:
         return None, text
