@@ -13,6 +13,18 @@ Each task: owned files, what it needs first, who reviews it.
 | T4 | Sandbox: isolated folder, static scan, try the candidate, measure tokens + time → `TrialReport` | `reelay/sandbox/`, `tests/test_sandbox.py` | — | T5 | todo |
 | T5 | Adapters: shared interface + Claude Code adapter (skill/model/effort flags) | `reelay/adapters/`, `tests/test_adapters.py` | — | T1 | todo |
 
+### Skills to use (installed; don't install new ones without the owner's OK)
+| Task | Skill | Use it for |
+|---|---|---|
+| T1 | `watch-video` (`~/.claude/skills/watch-video/scripts/`) | Proven download → frames → captions/Whisper pipeline. Reuse its approach; vendor code only if its LICENSE allows, with credit |
+| T1 | `agent-reach` (`agent-reach read/subtitle <url>`) | Multi-platform links (YouTube, X, Reddit, Bilibili…) and subtitles |
+| T2, T5 | `claude-api` | Current model IDs (Haiku for routing), structured output, SDK usage |
+| T4 | `skill-scan` (`~/.claude/skills/skill-scan/scan.py`) | Static scan step of the sandbox; call it, don't copy it |
+| T5 | `claude-code-guide` agent | Exact Claude Code CLI flags for model, effort, skills, headless runs |
+| all | `engineering:testing-strategy` | Test plan for the module |
+
+Searched GitHub for Telegram/video/sandbox skills: only 0–2 star repos, not used.
+
 ## Wave 2 — after wave 1 merges
 
 | ID | Task | Owns | Needs | Reviewer | Status |
