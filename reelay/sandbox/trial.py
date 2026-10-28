@@ -1,16 +1,13 @@
 """Orchestrates one trial: fetch -> scan -> (maybe) run -> measure -> clean up."""
 
 import shutil
+import tempfile
 import time
-import uuid
 from pathlib import Path
 
 from reelay.core.types import Candidate, TrialReport
-from reelay.sandbox import fetch, scan
+from reelay.sandbox import fetch, safety, scan
 from reelay.sandbox.runner import Runner, claude_runner
-
-DEFAULT_ROOT = Path("~/.reelay/sandbox_runs")
-
 
 def run_trial(
     candidate: Candidate,
@@ -23,9 +20,9 @@ def run_trial(
 ) -> TrialReport:
     """Trial `candidate` and return a report. Never raises for bad candidates."""
     runner = runner or claude_runner
-    run_dir = (root or DEFAULT_ROOT).expanduser() / uuid.uuid4().hex[:12]
+    # mkdtemp makes a private (0700) folder in the system temp dir, away from ~/.reelay.
+    run_dir = Path(tempfile.mkdtemp(prefix="reelay-sandbox-", dir=root))
     repo = run_dir / "repo"
-    run_dir.mkdir(parents=True, mode=0o700)
     try:
         return _trial(candidate, runner, fetcher, scanner, timeout_s, run_dir, repo)
     finally:
@@ -42,6 +39,11 @@ def _trial(candidate, runner, fetcher, scanner, timeout_s, run_dir, repo) -> Tri
         fetcher(candidate.url, repo)
     except fetch.FetchError as e:
         return report("review", False, False, 0, 0.0, "Could not fetch it, so nothing was tried.", str(e))
+
+    problem = safety.find_problem(repo)
+    if problem:
+        return report("high", True, False, 0, 0.0,
+                      "Refused to run it: " + problem + ".", "safety check: " + problem)
 
     verdict, note = scanner(repo)
     if verdict == "high":

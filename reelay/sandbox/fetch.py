@@ -1,10 +1,14 @@
 """Step 1: shallow git clone of an https URL into a fresh folder."""
 
+import shutil
 import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
 
 from reelay.video.download import is_private_host
+
+
+MAX_CLONE_BYTES = 50 * 1024 * 1024
 
 
 class FetchError(Exception):
@@ -39,3 +43,10 @@ def clone(url: str, dest: Path, timeout_s: int = 120) -> None:
         raise FetchError("git is not installed") from None
     if proc.returncode != 0:
         raise FetchError("git clone failed: " + proc.stderr.strip()[-300:])
+    if _size(dest) > MAX_CLONE_BYTES:
+        shutil.rmtree(dest, ignore_errors=True)
+        raise FetchError("repository is larger than 50 MB")
+
+
+def _size(path: Path) -> int:
+    return sum(p.stat().st_size for p in path.rglob("*") if p.is_file() and not p.is_symlink())

@@ -3,12 +3,19 @@
 Public entry point: `run_trial(candidate, runner=None, ...)`.
 
 What "isolated" means here (honest version, folder isolation is NOT a VM):
-- The repo is cloned into a fresh folder under ~/.reelay/sandbox_runs/<id>/.
+- The repo is cloned into a fresh private (0700) folder in the system temp dir.
+- Repos with symlinks, hooks, too many files or over 50 MB are never run.
 - Nothing from the repo is run by us. Claude Code is started with its own
   HOME and CLAUDE_CONFIG_DIR inside that folder, so the user's real skills,
   settings, memory and projects are not loaded.
-- Claude gets only file tools (no Bash, no web tools) and a hard time limit.
-- Only a minimal environment is passed (PATH + ANTHROPIC_API_KEY if set).
+- Claude runs with --bare (no hooks, no keychain), "disableAllHooks", file tools
+  only (no Bash, no web), allow rules scoped to the work folder, deny rules for
+  ~/.reelay, ~/.ssh, ~/.claude, a hard time limit (process group is killed).
+- Auth: your Claude login (OAuth/keychain) does NOT carry into the isolated HOME,
+  verified: "Not logged in". Trials therefore need an API key (ANTHROPIC_API_KEY
+  or anthropic_api_key in ~/.reelay/config.toml). Without one, nothing is run.
+- The path-scoped rule syntax and the hook blocking were written from the docs
+  and --help; they could not be tested live without an API key.
 
 What it does NOT stop: Claude Code itself runs as the same OS user, so a bug
 in it or a malicious skill that tricks it could still read files this user can
