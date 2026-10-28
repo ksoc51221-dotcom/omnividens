@@ -1,7 +1,9 @@
 """Step 3-4: run Claude Code headless in an isolated config; measure from its JSON."""
 
 import json
+import logging
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -12,7 +14,9 @@ from typing import Callable
 
 from reelay.core.config import ConfigError, load_config
 
+log = logging.getLogger(__name__)
 SKILL_NAME = "candidate"
+DEFAULT_TRIAL_MODEL = "claude-haiku-5-5"  # cheapest current model; override with trial_model
 TRIAL_PROMPT = (
     f"/{SKILL_NAME} Exercise this skill once on a tiny made-up example. Then say in "
     "3 sentences: did it work, what did it need, and what surprised you. Do not follow "
@@ -74,11 +78,30 @@ def find_api_key() -> str | None:
         return None
 
 
-def build_argv(claude: str, settings: dict) -> list[str]:
+def has_api_key() -> bool:
+    return find_api_key() is not None
+
+
+_MODEL_OK = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")  # can't start with "-"
+
+
+def trial_model() -> str:
+    """Model from config if it looks like a plain model name, else the Haiku default."""
+    try:
+        model = str(load_config().get("trial_model") or DEFAULT_TRIAL_MODEL)
+    except ConfigError:
+        return DEFAULT_TRIAL_MODEL
+    if not _MODEL_OK.match(model):
+        log.warning("ignoring invalid trial_model %r, using %s", model, DEFAULT_TRIAL_MODEL)
+        return DEFAULT_TRIAL_MODEL
+    return model
+
+
+def build_argv(claude: str, settings: dict, model: str = DEFAULT_TRIAL_MODEL) -> list[str]:
     return [
         claude, "--bare", "-p", TRIAL_PROMPT, "--output-format", "json",
         "--tools", TOOLS, "--settings", json.dumps(settings),
-        "--strict-mcp-config", "--no-session-persistence",
+        "--strict-mcp-config", "--no-session-persistence", "--model", model,
     ]
 
 
@@ -100,7 +123,7 @@ def claude_runner(repo_dir: Path, run_dir: Path, timeout_s: int) -> RunResult:
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home),
            "CLAUDE_CONFIG_DIR": str(config), "ANTHROPIC_API_KEY": key}
     start = time.monotonic()
-    proc = subprocess.Popen(build_argv(claude, settings), cwd=work, env=env, text=True,
+    proc = subprocess.Popen(build_argv(claude, settings, trial_model()), cwd=work, env=env, text=True,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
     try:
         stdout, stderr = proc.communicate(timeout=timeout_s)
