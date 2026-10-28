@@ -7,9 +7,9 @@ Each task: owned files, what it needs first, who reviews it.
 
 | ID | Task | Owns | Needs | Reviewer | Status |
 |---|---|---|---|---|---|
-| T1 | Video pipeline: yt-dlp download (any platform), ffmpeg frames every ~2 s + scene cuts, subtitles or Whisper transcript, fallback message on failure → `VideoBundle` | `reelay/video/`, `tests/test_video.py` | — | T2 | todo |
-| T2 | Haiku router: parse "use skill / model / effort" + task, ask a clarifying question if unclear → `Instruction` | `reelay/router/`, `tests/test_router.py` | — | T3 | todo |
-| T3 | Telegram bot: receive links/files/text, one-time pairing code, Adopt/Skip buttons, map messages → `Job` | `reelay/bot/`, `tests/test_bot.py` | — | T4 | todo |
+| T1 | Video pipeline: yt-dlp download (any platform), ffmpeg frames every ~2 s + scene cuts, subtitles or Whisper transcript, fallback message on failure → `VideoBundle` | `reelay/video/`, `tests/test_video.py` | — | T2 | review |
+| T2 | Haiku router: parse "use skill / model / effort" + task, ask a clarifying question if unclear → `Instruction` | `reelay/router/`, `tests/test_router.py` | — | T3 | review |
+| T3 | Telegram bot: receive links/files/text, one-time pairing code, Adopt/Skip buttons, map messages → `Job` | `reelay/bot/`, `tests/test_bot.py` | — | T4 | review |
 | T4 | Sandbox: isolated folder, static scan, try the candidate, measure tokens + time → `TrialReport` | `reelay/sandbox/`, `tests/test_sandbox.py` | — | T5 | todo |
 | T5 | Adapters: shared interface + Claude Code adapter (skill/model/effort flags) | `reelay/adapters/`, `tests/test_adapters.py` | — | T1 | todo |
 
