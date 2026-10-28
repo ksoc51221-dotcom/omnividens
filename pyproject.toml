@@ -1,0 +1,12 @@
+[project]
+name = "reelay"
+version = "0.0.1"
+description = "Share a video to Telegram; your AI watches, fact-checks and safely trials what's in it."
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
