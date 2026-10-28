@@ -23,6 +23,7 @@ class Incoming:
     user_id: str
     text: str = ""
     file: Path | None = None  # already downloaded by the Telegram layer
+    forwarded: bool = False  # forwarded text is someone else's words: data, not a command
 
 
 @dataclass
@@ -34,6 +35,9 @@ class Reply:
 def message_to_job(msg: Incoming) -> Job:
     """A file or link is a video job; anything else is an instruction for the AI."""
     match = _URL.search(msg.text)
+    if msg.forwarded:  # keep the link or file, drop the forwarded words
+        msg = Incoming(msg.user_id, "" if match is None else match.group(), msg.file)
+        match = _URL.search(msg.text)
     if msg.file is not None:
         return Job(msg.user_id, JobKind.VIDEO, text=msg.text, file=msg.file)
     if match:
@@ -51,17 +55,22 @@ class ReelayBot:
         on_job: Callable[[Job], None],
         on_decision: Callable[[str, str, str], None],
     ):
+        # NOTE for T8: `on_decision` must check that report_id belongs to user_id
+        # and ignore repeats (double taps); this class does not track reports.
         self.pairing = pairing
         self.on_job = on_job  # called with a Job
         self.on_decision = on_decision  # called with (user_id, report_id, "adopt"|"skip")
 
     def handle_message(self, msg: Incoming) -> Reply | None:
-        if msg.text.startswith("/start") or msg.text.lower().startswith("/pair"):
+        command = msg.text.split(maxsplit=1)[0].split("@")[0].lower() if msg.text.strip() else ""
+        if command in ("/start", "/pair"):
             return self._handle_pairing(msg)
         if not self.pairing.is_paired(msg.user_id):
             return None  # ignore strangers silently
         if not msg.text.strip() and msg.file is None:
             return Reply("Send me a video link, a video file, or a message.")
+        if msg.forwarded and msg.file is None and not _URL.search(msg.text):
+            return Reply("That's a forwarded message. Tell me in your own words what to do with it.")
         job = message_to_job(msg)
         self.on_job(job)
         if job.kind is JobKind.VIDEO:
@@ -92,6 +101,10 @@ class ReelayBot:
 def report_reply(report_id: str, text: str) -> Reply:
     """A report message with Adopt / Skip buttons."""
     return Reply(text, [("Adopt", f"{ADOPT}:{report_id}"), ("Skip", f"{SKIP}:{report_id}")])
+
+
+def too_big_reply() -> Reply:
+    return Reply("That file is too big for Telegram bots (20 MB). Send a link or a shorter clip.")
 
 
 def download_failed_reply() -> Reply:

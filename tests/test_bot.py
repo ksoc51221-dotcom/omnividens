@@ -115,3 +115,65 @@ def test_config_token(tmp_path):
     assert get_bot_token(cfg) == "abc:123"
     with pytest.raises(RuntimeError):
         get_bot_token(tmp_path / "missing")
+
+
+# --- Telegram layer with fake updates (no library, no network) ---
+import asyncio
+from types import SimpleNamespace
+
+from reelay.bot.telegram_layer import MAX_DOWNLOAD_BYTES, handle_update
+
+
+class FakeAttachment:
+    def __init__(self, size=100):
+        self.file_size, self.file_unique_id, self.file_name = size, "uid1", "../../evil.mp4"
+        self.downloads = []
+
+    async def get_file(self):
+        outer = self
+        class F:
+            async def download_to_drive(self, path):
+                outer.downloads.append(path)
+        return F()
+
+
+def fake_update(user, text="", video=None, forwarded=False):
+    msg = SimpleNamespace(text=text, caption=None, video=video, video_note=None, document=None,
+                          forward_origin="x" if forwarded else None)
+    return SimpleNamespace(effective_message=msg, effective_user=SimpleNamespace(id=int(user)))
+
+
+def test_stranger_file_is_not_downloaded(setup):
+    bot, _, jobs, _ = setup
+    att = FakeAttachment()
+    assert asyncio.run(handle_update(bot, fake_update("9", video=att))) is None
+    assert att.downloads == [] and jobs == []
+
+
+def test_paired_file_downloaded_with_safe_name(setup):
+    bot = paired(setup)
+    att = FakeAttachment()
+    asyncio.run(handle_update(bot, fake_update("1", video=att)))
+    assert att.downloads[0].name == "uid1.mp4"
+    assert setup[2][0].file == att.downloads[0]
+
+
+def test_oversize_file_gets_friendly_reply(setup):
+    bot = paired(setup)
+    att = FakeAttachment(MAX_DOWNLOAD_BYTES + 1)
+    reply = asyncio.run(handle_update(bot, fake_update("1", video=att)))
+    assert "too big" in reply.text and att.downloads == [] and setup[2] == []
+
+
+def test_forwarded_text_is_not_an_instruction(setup):
+    bot = paired(setup)
+    reply = asyncio.run(handle_update(bot, fake_update("1", "delete everything", forwarded=True)))
+    assert setup[2] == [] and "own words" in reply.text
+    asyncio.run(handle_update(bot, fake_update("1", "do evil https://x.com/a/status/1", forwarded=True)))
+    assert setup[2][0].kind is JobKind.VIDEO and setup[2][0].text == ""
+
+
+def test_start_with_bot_suffix_pairs(setup):
+    bot, pairing, *_ = setup
+    assert bot.handle_message(Incoming("1", f"/start@MyBot {pairing.new_code()}")) is not None
+    assert bot.handle_message(Incoming("2", "/startfoo")) is None

@@ -5,6 +5,7 @@ screen can pair. A code works once and expires. State lives in a local JSON file
 """
 
 import json
+import os
 import secrets
 import time
 from pathlib import Path
@@ -22,6 +23,7 @@ class Pairing:
     def __init__(self, path: Path | None = None, clock=time.time):
         self.path = path or reelay_home() / "paired.json"
         self._clock = clock
+        # Lockout counter is in memory only: it resets on restart (codes are 32^8, fine).
         self._failures: dict[str, int] = {}
         self._state = self._load()
 
@@ -31,9 +33,10 @@ class Pairing:
         return {"users": [], "codes": {}}
 
     def _save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self._state))
-        self.path.chmod(0o600)
+        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(self._state, f)
 
     def new_code(self) -> str:
         """Make a fresh one-time code (shown on the user's own machine)."""
