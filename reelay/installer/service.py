@@ -15,6 +15,8 @@ from typing import Callable
 
 from reelay.core.config import reelay_home
 
+from .config_file import private_dir
+
 LABEL = "com.reelay.bot"
 EXTRA_PATH = ["/opt/homebrew/bin", "/usr/local/bin", "~/.local/bin", "/usr/bin", "/bin"]
 
@@ -36,7 +38,7 @@ def reelay_command() -> list[str]:
 
 
 def build_plist(command: list[str], path_env: str, log: Path) -> dict:
-    dirs = [d for d in path_env.split(os.pathsep) if d]
+    dirs = [d for d in path_env.split(os.pathsep) if os.path.isabs(d)]  # drop relative entries like '.'
     dirs += [str(Path(d).expanduser()) for d in EXTRA_PATH if str(Path(d).expanduser()) not in dirs]
     return {
         "Label": LABEL,
@@ -67,7 +69,8 @@ def install(run: Runner = _run, home: Path | None = None, command: list[str] | N
     """Write the agent and start it. Returns "" on success or a friendly error message."""
     plist = plist_path(home)
     log = reelay_home() / "reelay.log"
-    log.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    private_dir(log.parent)
+    log.touch(mode=0o600)  # logs may hold video links and message text
     plist.parent.mkdir(parents=True, exist_ok=True)
     data = build_plist(command or reelay_command(), path_env if path_env is not None else os.environ.get("PATH", ""), log)
     plist.write_bytes(plistlib.dumps(data))

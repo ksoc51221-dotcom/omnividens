@@ -17,6 +17,7 @@ from reelay.core.config import ConfigError, config_path, load_config
 from . import service
 from .checks import Check, tool_checks
 from .config_file import save_config
+from .folders import forbidden_reason
 from .qr import qr_text
 from .telegram import TOKEN_SHAPE, NetworkProblem, TokenRejected, get_bot_username
 from .ui import Console
@@ -197,10 +198,7 @@ class Wizard:
         path = Path(text).expanduser()
         if not path.is_dir():
             return "That folder doesn't exist. Check the spelling (you can drag a folder into Terminal)."
-        resolved = path.resolve()
-        if resolved in (Path("/").resolve(), self.deps.home.resolve()):
-            return "That is too wide. Choose a folder inside it, like ~/Projects/my-app."
-        return ""
+        return forbidden_reason(path, self.deps.home)
 
     # --- step 4: optional API key -----------------------------------------------------
     def step_api_key(self, old: dict) -> None:
@@ -238,7 +236,8 @@ class Wizard:
             return False
         io.say(f"  ✓ Saved to {config_path()} (only you can read it).")
         if backup:
-            io.say(f"  Your old settings were kept in {backup}.")
+            io.say(f"  Your old settings were kept in {backup}. It still holds any old token or key,")
+            io.say("  so delete it once the new settings work. (Comments in a hand-edited file are not carried over.)")
         self.updates = {}  # drop secrets from memory as soon as they're saved
         return True
 
@@ -255,7 +254,7 @@ class Wizard:
             io.say(qr)
         io.say(f"  Link: {link}")
         io.say(f"  Or open @{username} and send:  /start {code}")
-        io.say("  The code works once and expires in 15 minutes. Only you can see it here.")
+        io.say("  The code works once and expires in 15 minutes. Don't share this screen until you've paired.")
         io.say()
         if self._start_bot(before):
             io.say("All set! Send your bot a video link.")

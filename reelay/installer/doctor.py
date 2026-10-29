@@ -43,6 +43,10 @@ def config_checks(path: Path | None = None) -> list[Check]:
     checks.append(Check("Anthropic API key (optional, costs money)", has_key,
                         "saved: sandbox trials can run" if has_key else "not set: trials are scan-only",
                         "" if has_key else "optional: reelay setup", required=False))
+    backup = path.with_name(path.name + ".bak")
+    if backup.exists():
+        checks.append(Check("Old settings backup", False, "still holds your previous token/key",
+                            f"delete it once the new settings work: rm {backup}", required=False))
     return checks
 
 

@@ -513,3 +513,98 @@ def test_install_script_refuses_while_repo_is_placeholder():
     env = {k: v for k, v in os.environ.items() if k != "REELAY_REPO"}
     result = subprocess.run(["sh", str(SCRIPT)], capture_output=True, text=True, env=env, timeout=30)
     assert result.returncode == 1 and "placeholder" in result.stdout
+
+
+# ---------- T7 review fixes ----------
+
+@pytest.mark.parametrize("sub", [".ssh", ".ssh/keys", ".aws", ".gnupg", ".config/gh", "Library/Keychains", "dot-reelay"])
+def test_secret_folders_are_refused(home, sub):
+    from reelay.installer.folders import forbidden_reason
+    (home / sub).mkdir(parents=True, exist_ok=True)
+    assert forbidden_reason(home / sub, home) != ""
+
+
+@pytest.mark.parametrize("path", ["/", "/etc", "/etc/ssh", "/usr", "/usr/local", "/bin", "/var", "/private", "/System", "/Library", "/Users"])
+def test_system_and_wide_folders_are_refused(home, path):
+    from reelay.installer.folders import forbidden_reason
+    assert forbidden_reason(Path(path), home) != ""
+
+
+def test_parent_of_home_is_refused_but_normal_projects_are_fine(home):
+    from reelay.installer.folders import forbidden_reason
+    assert forbidden_reason(home.parent, home) != ""
+    assert forbidden_reason(home, home) != ""
+    assert forbidden_reason(project(home, "my-app"), home) == ""
+    (home / "Documents" / "code").mkdir(parents=True)
+    assert forbidden_reason(home / "Documents" / "code", home) == ""
+
+
+def test_symlink_into_ssh_is_refused(home):
+    from reelay.installer.folders import forbidden_reason
+    (home / ".ssh").mkdir()
+    (home / "innocent").symlink_to(home / ".ssh")
+    assert forbidden_reason(home / "innocent", home) != ""
+
+
+def test_wizard_rejects_secret_folder_end_to_end(home):
+    (home / ".ssh").mkdir()
+    user = FakeUser(["", TOKEN, str(home / ".ssh"), "", "n", "n"])
+    Wizard(user.console(), make_deps(home)).run()
+    assert "passwords, keys" in user.screen
+    assert load_config(CONFIG(home))["allowed_projects"] == []
+
+
+def test_backup_is_never_looser_than_0600_even_over_an_old_one(home):
+    path = CONFIG(home)
+    path.parent.mkdir(mode=0o755)
+    path.write_text('telegram_bot_token = "old"\n')
+    os.chmod(path, 0o644)  # hand-made file
+    backup = path.with_name("config.toml.bak")
+    backup.write_text("stale")
+    os.chmod(backup, 0o666)
+    save_config({"telegram_bot_token": TOKEN}, path)
+    assert stat.S_IMODE(backup.stat().st_mode) == 0o600
+    assert load_config(backup) == {"telegram_bot_token": "old"}
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700  # existing folder tightened too
+    assert not path.with_name("config.toml.tmp").exists()
+
+
+def test_wizard_warns_that_backup_holds_old_secrets(home):
+    save_config({"telegram_bot_token": "old"})
+    user = FakeUser(["", TOKEN, "", "n", "n"])
+    Wizard(user.console(), make_deps(home)).run()
+    assert "config.toml.bak" in user.screen and "delete it" in user.screen
+    assert "Comments" in user.screen
+
+
+def test_doctor_reminds_to_delete_backup(home):
+    save_config({"telegram_bot_token": "old"})
+    save_config({"telegram_bot_token": TOKEN})
+    checks = {c.name: c for c in config_checks(CONFIG(home))}
+    assert not checks["Old settings backup"].ok and "rm " in checks["Old settings backup"].fix
+    assert not checks["Old settings backup"].required
+    CONFIG(home).with_name("config.toml.bak").unlink()
+    assert "Old settings backup" not in {c.name for c in config_checks(CONFIG(home))}
+
+
+def test_config_is_written_as_utf8(home):
+    save_config({"allowed_projects": ["/Users/é/项目"]})
+    assert "项目".encode("utf-8") in CONFIG(home).read_bytes()
+
+
+def test_service_log_is_private_and_path_has_no_relative_entries(home):
+    service.install(run=fake_launchctl([]), home=home, command=["x"], path_env=".:relative/bin:/opt/homebrew/bin")
+    log = home / "dot-reelay" / "reelay.log"
+    assert stat.S_IMODE(log.stat().st_mode) == 0o600
+    path = plistlib.loads(service.plist_path(home).read_bytes())["EnvironmentVariables"]["PATH"].split(os.pathsep)
+    assert all(os.path.isabs(p) for p in path) and "/opt/homebrew/bin" in path
+
+
+def test_pairing_screens_say_dont_share(home, capsys):
+    user = FakeUser(happy(project(home)))
+    Wizard(user.console(), make_deps(home)).run()
+    assert "Don't share this screen" in user.screen
+    save_config({"telegram_bot_token": TOKEN, "telegram_bot_username": USER})
+    cli_main(["pair"])
+    assert "don't share this screen" in capsys.readouterr().out

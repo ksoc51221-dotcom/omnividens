@@ -34,7 +34,7 @@ def _pair(io: Console) -> int:
     code = _make_code()
     link = f"https://t.me/{username}?start={code}"
     io.say(qr_text(link) or "")
-    io.say(f"Link: {link}\nOr send your bot:  /start {code}   (works once, 15 minutes)")
+    io.say(f"Link: {link}\nOr send your bot:  /start {code}   (works once, 15 minutes; don't share this screen)")
     if service.is_installed():
         io.say("Restart the background service so it sees this code:  reelay service install")
     return 0
