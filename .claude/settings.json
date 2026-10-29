@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/bin/pytest:*)",
+      "Bash(.venv/bin/reelay doctor)",
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git worktree list:*)"
+    ],
+    "deny": [
+      "Read(~/.reelay/config.toml)",
+      "Bash(git push:*)"
+    ]
+  }
+}
