@@ -29,8 +29,8 @@ Searched GitHub for Telegram/video/sandbox skills: only 0–2 star repos, not us
 
 | ID | Task | Owns | Needs | Reviewer | Status |
 |---|---|---|---|---|---|
-| T6 | Fact-check: extract claims with timestamps, check with web sources, find candidates → `Verdict` | `reelay/factcheck/` | T1 | T4 | todo |
-| T7 | Profile: 3-question quiz, vibe dial, local store, tone in replies | `reelay/profile/` | T3 | T2 | todo |
+| T6 | Fact-check: extract claims with timestamps, check with web sources, find candidates → `Verdict` | `reelay/factcheck/` | T1 | T4 | review |
+| T7 | Profile: 3-question quiz, vibe dial, local store, tone in replies | `reelay/profile/` | T3 | T2 | review |
 | T8 | Orchestration: wire bot → video → factcheck → sandbox → report, plus bot → router → adapter | `reelay/core/pipeline.py`, `reelay/__main__.py` | T1–T6 | T3 | todo |
 | T9 | Installer: one command, detects AI tools, QR pairing, 5-minute setup | `installer/` | T3, T5 | T7 | todo |
 
