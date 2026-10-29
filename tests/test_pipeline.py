@@ -478,3 +478,17 @@ def test_other_errors_are_not_hidden():
 
     with pytest.raises(ValueError):
         serve(FakeApp(ValueError("a real bug")))
+
+
+def test_rejected_token_never_printed(capsys):
+    pytest.importorskip("telegram")
+    from telegram.error import Conflict, InvalidToken
+
+    from reelay.__main__ import CONFLICT_HELP, TOKEN_HELP, serve
+
+    err = InvalidToken("The token `123:SECRET` was rejected by the server.")
+    assert serve(FakeApp(err)) == 1
+    out = capsys.readouterr().out
+    assert out.strip() == TOKEN_HELP and "SECRET" not in out and "Traceback" not in out
+    assert serve(FakeApp(Conflict("terminated by other getUpdates request"))) == 1
+    assert capsys.readouterr().out.strip() == CONFLICT_HELP

@@ -64,6 +64,8 @@ class TelegramSender:
 CERT_HELP = ("Can't reach Telegram securely: this network may be filtering it (school/work Wi-Fi). "
              "Try another network or a phone hotspot.")
 NET_HELP = "Can't reach Telegram: check your internet connection."
+TOKEN_HELP = "Telegram rejected the bot token. Run  reelay setup  to enter a new one."
+CONFLICT_HELP = "Reelay is already running somewhere else with this bot token. Stop the other copy first."
 
 
 def explain_network_error(error: BaseException) -> str:
@@ -80,10 +82,17 @@ def explain_network_error(error: BaseException) -> str:
 
 def serve(app) -> int:
     """Run the bot's polling loop; a network failure becomes one message and exit code 1."""
-    from telegram.error import NetworkError  # TimedOut is a NetworkError too
+    from telegram.error import Conflict, InvalidToken, NetworkError  # TimedOut is a NetworkError too
 
+    # Never print the exception text: InvalidToken's message contains the full bot token.
     try:
         app.run_polling()
+    except InvalidToken:
+        print(TOKEN_HELP)
+        return 1
+    except Conflict:
+        print(CONFLICT_HELP)
+        return 1
     except NetworkError as e:
         print(explain_network_error(e))
         return 1
