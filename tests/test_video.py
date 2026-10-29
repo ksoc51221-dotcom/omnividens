@@ -147,3 +147,17 @@ def test_long_local_file_rejected(clip, tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline, "MAX_DURATION_S", 3)
     with pytest.raises(TooLongError):
         load_video(clip, tmp_path)
+
+
+def test_groq_key_from_env_then_toml(tmp_path, monkeypatch):
+    from reelay.video.transcript import load_groq_key
+    monkeypatch.setenv("REELAY_HOME", str(tmp_path))
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    assert load_groq_key() is None  # no file
+    (tmp_path / "config.toml").write_text('groq_api_key = "from-toml"\n')
+    assert load_groq_key() == "from-toml"
+    monkeypatch.setenv("GROQ_API_KEY", "from-env")
+    assert load_groq_key() == "from-env"
+    monkeypatch.delenv("GROQ_API_KEY")
+    (tmp_path / "config.toml").write_text("not = valid = toml")
+    assert load_groq_key() is None  # broken config means no key, no crash

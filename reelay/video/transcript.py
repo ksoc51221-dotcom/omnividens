@@ -12,9 +12,10 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+from reelay.core.config import ConfigError, load_config
+
 GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_MODEL = "whisper-large-v3"
-CONFIG_PATH = Path("~/.reelay/config").expanduser()
 
 _CUE = re.compile(r"(\d+):(\d{2}):(\d{2})[.,]\d{3}\s+-->")
 _TAG = re.compile(r"<[^>]+>")
@@ -60,17 +61,14 @@ def read_subtitle(path: Path) -> str:
 
 
 def load_groq_key() -> str | None:
-    """GROQ_API_KEY from the environment, else from ~/.reelay/config (KEY=value lines)."""
+    """GROQ_API_KEY from the environment, else `groq_api_key` in ~/.reelay/config.toml."""
     if os.environ.get("GROQ_API_KEY"):
         return os.environ["GROQ_API_KEY"].strip()
     try:
-        for line in CONFIG_PATH.read_text().splitlines():
-            key, _, value = line.partition("=")
-            if key.strip() == "GROQ_API_KEY" and value.strip():
-                return value.strip().strip("\"'")
-    except OSError:
-        pass
-    return None
+        key = load_config().get("groq_api_key")
+    except ConfigError:
+        return None
+    return key.strip() if isinstance(key, str) and key.strip() else None
 
 
 def has_audio(video: Path) -> bool:
