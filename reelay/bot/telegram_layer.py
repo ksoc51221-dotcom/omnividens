@@ -21,9 +21,18 @@ def _markup(reply: Reply):
     )
 
 
+def _no_preview():
+    """Links in fact-check text must not unfurl (previews fetch pages we didn't vet)."""
+    from telegram import LinkPreviewOptions
+
+    return LinkPreviewOptions(is_disabled=True)
+
+
 async def send_reply(application, user_id: str, reply: Reply) -> None:
     """Send a Reply (text + optional buttons) to a user."""
-    await application.bot.send_message(int(user_id), reply.text, reply_markup=_markup(reply))
+    await application.bot.send_message(
+        int(user_id), reply.text, reply_markup=_markup(reply), link_preview_options=_no_preview()
+    )
 
 
 MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024  # Telegram's limit for bot downloads
@@ -64,7 +73,9 @@ def build_application(bot: ReelayBot, token: str | None = None):
     async def on_message(update, context):
         reply = await handle_update(bot, update)
         if reply:
-            await update.effective_message.reply_text(reply.text, reply_markup=_markup(reply))
+            await update.effective_message.reply_text(
+                reply.text, reply_markup=_markup(reply), link_preview_options=_no_preview()
+            )
 
     async def on_button(update, context):
         query = update.callback_query
@@ -72,7 +83,7 @@ def build_application(bot: ReelayBot, token: str | None = None):
         reply = bot.handle_button(str(query.from_user.id), query.data or "")
         if reply:
             await query.edit_message_reply_markup(None)  # buttons used up
-            await query.message.reply_text(reply.text)
+            await query.message.reply_text(reply.text, link_preview_options=_no_preview())
 
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(MessageHandler(filters.TEXT | filters.VIDEO | filters.VIDEO_NOTE
