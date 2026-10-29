@@ -75,7 +75,10 @@ def service_check(is_running: Callable[[], bool] = service.is_running,
 def run_doctor(io: Console, which: Which = shutil.which, path: Path | None = None,
                extra: list[Check] | None = None) -> int:
     checks = tool_checks(which) + config_checks(path)
-    checks += extra if extra is not None else [pairing_check(), service_check(), check_telegram()]
+    if extra is None:
+        io.say("Checking your connection to Telegram...")  # can take a few seconds
+        extra = [pairing_check(), service_check(), check_telegram()]
+    checks += extra
     io.say("Reelay doctor")
     io.say("=============")
     for c in checks:

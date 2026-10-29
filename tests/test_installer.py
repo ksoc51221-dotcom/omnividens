@@ -613,14 +613,25 @@ def test_pairing_screens_say_dont_share(home, capsys):
 
 # ---------- network check (live-test follow-up: school filter breaks Telegram TLS) ----------
 
+import http.client
 import socket
 import ssl
 
-from reelay.installer.netcheck import FILTERED, TIMEOUT, UNREACHABLE, check_telegram
+from reelay.installer.netcheck import (DNS_BLOCKED, FILTERED, INTERFERING, NEUTRAL_URL, NO_CERTS, TIMEOUT,
+                                       UNREACHABLE, check_telegram)
 
 
 def raising(exc):
     def opener(url, timeout):
+        raise exc
+    return opener
+
+
+def only_telegram_fails(exc):
+    """Telegram's address raises `exc`; the neutral test site works."""
+    def opener(url, timeout):
+        if url == NEUTRAL_URL:
+            return OpenedOK()
         raise exc
     return opener
 
@@ -639,12 +650,50 @@ def test_netcheck_ok_when_telegram_answers_even_with_an_http_error():
 @pytest.mark.parametrize("exc", [
     urllib.error.URLError(ssl.SSLCertVerificationError("CERTIFICATE_VERIFY_FAILED")),
     ssl.SSLCertVerificationError("CERTIFICATE_VERIFY_FAILED"),
-    ssl.SSLError("handshake failed"),
 ])
-def test_netcheck_certificate_error_says_network_is_filtering(exc):
-    result = check_telegram(opener=raising(exc))
+def test_netcheck_certificate_error_only_for_telegram_says_network_is_filtering(exc):
+    result = check_telegram(opener=only_telegram_fails(exc))
     assert not result.ok and result.required and result.fix == FILTERED
     assert "school/work Wi-Fi" in result.fix and "phone hotspot" in result.fix
+
+
+def test_netcheck_certificate_error_everywhere_blames_the_mac_not_the_network():
+    bad = ssl.SSLCertVerificationError("CERTIFICATE_VERIFY_FAILED")
+    result = check_telegram(opener=raising(bad))  # the neutral site fails too
+    assert not result.ok and result.fix == NO_CERTS and "date and time" in result.fix
+    assert "filtering" not in result.fix
+    wrapped = check_telegram(opener=raising(urllib.error.URLError(bad)))
+    assert wrapped.fix == NO_CERTS
+
+
+def test_netcheck_neutral_site_being_offline_still_reports_filtering():
+    bad = ssl.SSLCertVerificationError("CERTIFICATE_VERIFY_FAILED")
+
+    def opener(url, timeout):
+        raise bad if url != NEUTRAL_URL else urllib.error.URLError(socket.timeout("t"))
+    assert check_telegram(opener=opener).fix == FILTERED
+
+
+def test_netcheck_non_certificate_tls_failure_says_interfering():
+    result = check_telegram(opener=only_telegram_fails(ssl.SSLError("handshake failed")))
+    assert not result.ok and result.fix == INTERFERING
+
+
+@pytest.mark.parametrize("exc", [
+    http.client.BadStatusLine("garbage"),
+    http.client.IncompleteRead(b"x"),
+    UnicodeError("label too long"),
+    ValueError("odd"),
+    RuntimeError("anything"),
+])
+def test_netcheck_never_raises_on_strange_failures(exc):
+    result = check_telegram(opener=raising(exc))
+    assert not result.ok and result.fix == UNREACHABLE
+
+
+def test_netcheck_does_not_swallow_ctrl_c():
+    with pytest.raises(KeyboardInterrupt):
+        check_telegram(opener=raising(KeyboardInterrupt()))
 
 
 @pytest.mark.parametrize("exc", [
@@ -657,10 +706,11 @@ def test_netcheck_timeout_says_check_internet(exc):
     assert not result.ok and result.fix == TIMEOUT and "internet connection" in result.fix
 
 
-def test_netcheck_other_failures_say_check_internet():
-    for exc in (urllib.error.URLError(socket.gaierror("no DNS")), ConnectionRefusedError()):
-        result = check_telegram(opener=raising(exc))
-        assert not result.ok and result.fix == UNREACHABLE
+def test_netcheck_other_failures_say_check_internet_and_dns_mentions_blocking():
+    refused = check_telegram(opener=raising(ConnectionRefusedError()))
+    assert not refused.ok and refused.fix == UNREACHABLE
+    dns = check_telegram(opener=raising(urllib.error.URLError(socket.gaierror("no DNS"))))
+    assert not dns.ok and dns.fix == DNS_BLOCKED and "blocking Telegram" in dns.fix
 
 
 def test_netcheck_sends_no_token_and_keeps_certificate_checks_on(home):
@@ -676,12 +726,33 @@ def test_netcheck_sends_no_token_and_keeps_certificate_checks_on(home):
 
 def test_doctor_shows_network_problem_as_required_fix(home):
     save_config({"telegram_bot_token": TOKEN})
-    blocked = check_telegram(opener=raising(ssl.SSLCertVerificationError("x")))
+    blocked = check_telegram(opener=only_telegram_fails(ssl.SSLCertVerificationError("x")))
     user = FakeUser([])
     code = run_doctor(user.console(), which=lambda n: "/x/" + n, path=CONFIG(home), extra=[blocked])
     assert code == 1
     assert "[FIX ] Can reach Telegram: certificate check failed" in user.screen
     assert "filtering Telegram" in user.screen and "Start with: This network" in user.screen
+
+
+def test_doctor_tells_user_it_is_checking_the_connection(home, monkeypatch):
+    import reelay.installer.doctor as doctor
+    order = []
+    user = FakeUser([])
+    io = user.console()
+    real_say = io.say
+    io.say = lambda text="": (order.append(text), real_say(text))[1]
+    monkeypatch.setattr(doctor, "check_telegram", lambda: order.append("CHECK") or Check("Can reach Telegram", True, "yes"))
+    monkeypatch.setattr(doctor, "pairing_check", lambda: Check("Telegram pairing", True, "1"))
+    monkeypatch.setattr(doctor, "service_check", lambda: Check("Starts at login", True, "on"))
+    run_doctor(io, which=lambda n: "/x/" + n, path=CONFIG(home))
+    assert order.index("Checking your connection to Telegram...") < order.index("CHECK")
+
+
+def test_default_opener_verifies_certificates_with_certifi_bundle():
+    from reelay.installer import netcheck
+    ctx = netcheck._context()
+    if ctx is not None:  # certifi installed (it comes with httpx)
+        assert ctx.verify_mode == ssl.CERT_REQUIRED and ctx.check_hostname
 
 
 def test_doctor_default_runs_the_network_check(home, monkeypatch):
@@ -695,7 +766,7 @@ def test_doctor_default_runs_the_network_check(home, monkeypatch):
 
 
 def test_wizard_stops_before_starting_bot_when_telegram_is_filtered(home):
-    blocked = check_telegram(opener=raising(ssl.SSLCertVerificationError("x")))
+    blocked = check_telegram(opener=only_telegram_fails(ssl.SSLCertVerificationError("x")))
     deps = make_deps(home, check_network=lambda: blocked)
     user = FakeUser(["", TOKEN, "", "n"])  # token step still works offline-style: username comes from fake
     assert Wizard(user.console(), deps).run() == 1
@@ -706,7 +777,7 @@ def test_wizard_stops_before_starting_bot_when_telegram_is_filtered(home):
 
 
 def test_wizard_token_step_explains_filter_instead_of_no_internet(home):
-    blocked = check_telegram(opener=raising(ssl.SSLCertVerificationError("x")))
+    blocked = check_telegram(opener=only_telegram_fails(ssl.SSLCertVerificationError("x")))
     deps = make_deps(home, check_network=lambda: blocked)
 
     def offline(token):
