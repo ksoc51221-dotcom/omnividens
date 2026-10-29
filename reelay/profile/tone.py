@@ -46,6 +46,7 @@ TOPICS = {
     "news": ("election", "war", "president", "government", "breaking", "news"),
 }
 _INTEREST = "interest_"
+MAX_COUNT = 9999
 
 
 def detect_topics(text: str) -> list[str]:
@@ -58,5 +59,9 @@ def learn(profile: Profile, text: str) -> Profile:
     """Count topics from something the user shared. Returns the updated profile."""
     for topic in detect_topics(text):
         key = _INTEREST + topic
-        profile.traits[key] = str(int(profile.traits.get(key, "0") or 0) + 1)
+        try:
+            count = int(profile.traits.get(key, "0"))
+        except ValueError:  # hand-edited or corrupt value: start again
+            count = 0
+        profile.traits[key] = str(min(max(count, 0) + 1, MAX_COUNT))
     return profile

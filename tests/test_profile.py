@@ -161,3 +161,30 @@ def test_learn_counts_topics_as_whole_words():
     learn(p, "I said hello, maintain")  # 'ai' inside 'maintain' must not match
     assert p.traits == {"interest_tech": "2"}
     assert "interest_tech: 2" in describe(p)
+
+
+def test_learn_survives_corrupt_count_and_caps():
+    p = Profile("1", traits={"interest_tech": "abc", "interest_food": "99999"})
+    learn(p, "ai recipe")
+    assert p.traits == {"interest_tech": "1", "interest_food": "9999"}
+
+
+def test_load_bounds_sizes_and_types(home):
+    import json
+    (home / "profiles").mkdir()
+    (home / "profiles" / "1.json").write_text(json.dumps(
+        {"goals": "abcdef", "traits": {f"k{i}": "v" * 500 for i in range(50)}}))
+    p = load("1")
+    assert p.goals == [] and len(p.traits) == 20
+    assert all(len(v) == 100 for v in p.traits.values())
+    (home / "profiles" / "2.json").write_text(json.dumps({"goals": ["g" * 999] * 9, "traits": [1]}))
+    p = load("2")
+    assert len(p.goals) == 5 and len(p.goals[0]) == 300 and p.traits == {}
+
+
+def test_describe_is_honest_about_claude_and_forget_removes_tmp(home):
+    assert "included when I ask Claude" in describe(Profile("1"))
+    save(Profile("1"))
+    tmp = home / "profiles" / "1.tmp"
+    tmp.write_text("x")
+    assert delete("1") and not tmp.exists()
