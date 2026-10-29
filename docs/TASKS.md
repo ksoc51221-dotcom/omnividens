@@ -32,11 +32,11 @@ Searched GitHub for Telegram/video/sandbox skills: only 0–2 star repos, not us
 | T6 | Fact-check: extract claims with timestamps, check with web sources, find candidates → `Verdict` | `reelay/factcheck/` | T1 | T4 | merged |
 | T7 | Profile: 3-question quiz, vibe dial, local store, tone in replies | `reelay/profile/` | T3 | T2 | merged |
 | T8 | Orchestration: wire bot → video → factcheck → sandbox → report, plus bot → router → adapter | `reelay/core/pipeline.py`, `reelay/__main__.py` | T1–T6 | T3 | merged |
-| T9 | Installer: one command, detects AI tools, QR pairing, 5-minute setup | `installer/` | T3, T5 | T7 | todo |
+| T9 | Installer: one command, detects AI tools, QR pairing, 5-minute setup | `installer/` | T3, T5 | T7 | approved |
 
 ## Wave 3 — polish
 
 | ID | Task | Owns | Needs | Reviewer | Status |
 |---|---|---|---|---|---|
 | T10 | Second adapter (Codex or Gemini) | `reelay/adapters/<name>.py` | T5 | T5 | todo |
-| T11 | README, demo script, architecture diagram for judges | `README.md`, `docs/DEMO.md` | T8 | orchestrator | todo |
+| T11 | README, demo script, architecture diagram for judges | `README.md`, `docs/DEMO.md` | T8 | orchestrator | approved |
