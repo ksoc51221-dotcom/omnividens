@@ -5,7 +5,7 @@
 <!-- TODO(owner): replace with a real screen recording (≈15 s, Reel → verdict → trial report → Adopt). -->
 > 🎞️ *Demo GIF placeholder — `docs/assets/demo.gif`*
 
-Built for the November 2026 hackathon. Status: **8 core modules merged, 214 automated tests passing; the installer (T9) and a second AI adapter (T10) are not merged yet.** What has and hasn't been run live is listed honestly under [Limitations](#limitations).
+Built for the November 2026 hackathon. Status: **9 modules merged (8 core + installer), 283 automated tests passing; a second AI adapter (T10) is not built yet.** What has and hasn't been run live is listed honestly under [Limitations](#limitations).
 
 ## What it does
 
@@ -19,12 +19,12 @@ Every reply ends with a 🧾 **trust receipt**: what Reelay saw, checked, ran, a
 ## Quickstart
 
 ```bash
-curl -fsSL https://example.invalid/reelay/install.sh | sh   # PLACEHOLDER: install URL not final (installer T9 in progress)
-reelay setup                                                # detects your AI tool, saves your Telegram bot token, shows a pairing code
-# then, in Telegram, send your bot:  /start <code>
+curl -fsSL https://RAW-URL-PLACEHOLDER/installer/install.sh | sh   # PLACEHOLDER: the GitHub repo/URL doesn't exist yet; install.sh refuses to run until it is set
+reelay setup                                                        # checks tools, saves your bot token (hidden input), folders, optional API key, shows a pairing QR
+# then scan the QR (or send your bot:  /start <code>)
 ```
 
-Today, from a checkout, the equivalent is `pip install -e '.[dev]'`, write `~/.reelay/config.toml` (see [DEMO.md](docs/DEMO.md#before-you-record)), and `python -m reelay` (add `--pair` for a new code).
+`install.sh` installs `uv` if missing, then Reelay and yt-dlp, then runs `reelay setup`. Other commands: `reelay doctor` (what's OK / what to fix), `reelay pair`, `reelay service install|remove` (optional start at login), `reelay run`. **The real `curl | sh` has not been run yet** (no repo to fetch from); the pieces were tested and `uv tool install` was run for real in a scratch copy. From a checkout today: `pip install -e '.[dev]'` then `reelay setup`.
 
 ## How it fits together
 
@@ -58,7 +58,7 @@ Modules only talk through the shared types in `reelay/core/types.py`. Video text
 | `sandbox` | Fetch, scan, isolated trial, measured cost | live trial needs an API key; scan-only otherwise |
 | `profile` | Quiz, vibe dial, local profile | `/profile`, `/vibe`, `/forget` |
 | `adapters` | One file per AI tool, one interface | Claude Code today; adding a tool = one file + one list entry |
-| `installer` | One-command setup | **in progress (T9), not merged** |
+| `installer` | `install.sh`, `reelay setup / doctor / pair / service` | hidden token input, 0600 config, folder deny-list, optional launchd |
 
 ## Safety model, in plain words
 
@@ -76,13 +76,13 @@ An **Opus orchestrator** session planned the work, wrote the shared contract and
 
 | Number | Value (from `git log` and the review files) |
 |---|---|
-| Commits on `main` | 44 over 2 days (28–29 Oct 2026) |
-| Merge commits of approved branches | 11 |
-| Reviews written | 8 module reviews + follow-up reviews (fallback, config, link-previews) |
-| **BLOCKERs found by reviewers before merge** | **7**, across 4 modules (T3 bot ×2, T5 adapters ×1, T4 sandbox ×3, T8 pipeline ×1) |
-| FIX items | 27 (hand count; see the review files) |
-| Tests | 214 passing, no network/API key needed |
-| Code | ≈ 2,950 lines in `reelay/`, ≈ 1,780 in `tests/` |
+| Commits on `main` | 53 over 2 days (28–29 Oct 2026) |
+| Merge commits of approved branches | 14 |
+| Reviews written | 9 module reviews (T1–T9) + follow-up reviews (fallback, config, link-previews) |
+| **BLOCKERs found by reviewers before merge** | **7**, across 4 modules (T3 bot ×2, T5 adapters ×1, T4 sandbox ×3, T8 pipeline ×1); the installer review had none but 3 FIX |
+| FIX items | about 30 (hand count; see the review files) |
+| Tests | 283 passing, no network/API key needed |
+| Code | ≈ 3,770 lines of Python in `reelay/` (incl. installer), ≈ 2,400 in `tests/` |
 
 Examples of what review caught: the bot **downloaded files from strangers before checking pairing**; the sandbox's blanket `Read`/`Write` rules would have let a malicious skill read `~/.ssh`; two modules **read the same config file in incompatible formats**; the Adopt message could have printed a `git clone --upload-pack=…` line built from a video-supplied URL.
 
@@ -90,16 +90,16 @@ Examples of what review caught: the bot **downloaded files from strangers before
 
 - **The sandbox is folder isolation, not a VM or container.** Same OS user, a fresh HOME, scoped tools and permission rules. A bug in Claude Code's permission system would not be contained. Docker is on the roadmap.
 - **Live trials need an Anthropic API key.** Verified live: with the isolated HOME a Pro/OAuth login is not carried over (`Not logged in`). Without a key Reelay does a **scan-only** report and says so.
-- **Not yet verified live** (reviewers had no key / a working login): the trial's `Read(//…)` permission rules and `--bare` hook-blocking (a canary-file test is still owed), the real `claude -p` JSON shape, the Haiku router against the live API, the API fact-check backend's search tool name, and Telegram end-to-end. All 214 tests use fakes. The owner's manual checklist is at the end of [T8.md](docs/reviews/T8.md).
+- **Not yet verified live** (reviewers had no key / a working login): the trial's `Read(//…)` permission rules and `--bare` hook-blocking (a canary-file test is still owed), the real `claude -p` JSON shape, the Haiku router against the live API, the API fact-check backend's search tool name, and Telegram end-to-end. All 283 tests use fakes. For the installer, a real BotFather token, QR scan, `launchctl` and login/restart are also untested. The owner's manual checklist is at the end of [T8.md](docs/reviews/T8.md).
 - Fact-check results are *sources cited by the model*, not proof. DNS rebinding / redirects to private hosts aren't fully covered.
 - Whisper (Groq) is opt-in and sends the audio to Groq. English subtitles only. Instagram carousels/images fail with a "send a screen recording" message.
 - Queue and pending confirmations are in memory; a restart forgets them.
 
 ## Roadmap
 
-1. Finish the one-command installer + QR pairing (T9).
+1. Publish the repo, set the real install URL and pin a release tag.
 2. Second adapter (Codex or Gemini; T10).
 3. Docker/VM sandbox option; live canary and API-backed test suite.
-4. Fit scoring against your real projects; profile learned from the videos you send.
+4. Fit scoring against your real projects; deeper profile learning from the videos you send.
 
 Tests: `pip install -e '.[dev]' && pytest`. Spec: [docs/SPEC.md](docs/SPEC.md) · Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · Demo script: [docs/DEMO.md](docs/DEMO.md)
