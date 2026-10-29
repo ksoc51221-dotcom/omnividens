@@ -56,9 +56,15 @@ This describes what the code and the peer reviews show. "Not verified live" mean
 ### 7. Download limits
 Private/loopback/link-local hosts rejected before yt-dlp (T2 FIX 1); ≤ 200 MB and ≤ 10 min (T2 FIX 2); Telegram files > 20 MB get a friendly reply. A local `source` is only ever a file the bot itself saved.
 
-### 8. Secrets and privacy
+### 8. Installer (T9)
+- Token and API key are read with hidden input (`getpass`), never printed, never in prompts, the plist or error text; the Telegram lookup raises argument-less exceptions because its URL contains the token. Tests assert this.
+- Config is written atomically as `0600` in a `0700` folder; the old file is kept as `config.toml.bak`, also `0600`, created fresh (T7 FIX: backups were briefly world-readable; `~/.reelay` is tightened even if it existed). The wizard and `reelay doctor` warn that the backup still holds old secrets (T7 FIX).
+- **Folder deny-list (T7 FIX):** the allow-list refuses `/`, Home, any parent of Home, anything inside `~/.ssh ~/.aws ~/.gnupg ~/.config ~/.reelay ~/Library` and system roots (`/etc /System /usr /var` …), after resolving symlinks.
+- Optional launchd service is off unless you say yes; the plist holds only the command, absolute PATH entries and the log path; `reelay.log` is `0600`. Never runs remote scripts or Homebrew for you (it prints those commands); `install.sh` refuses root and the unset-URL placeholder. Not verified live: real `launchctl`, login/restart, a real BotFather token and QR scan, the real `curl | sh`.
+
+### 9. Secrets and privacy
 - Token and keys only in `~/.reelay/config.toml`, never in code/git; `ConfigError` shows the path, not contents. httpx logs (which contain the token in URLs) are pinned to WARNING.
 - Profile: `0600`, size-bounded, `/forget` deletes it. Goals and vibe are sent to Claude when it checks a video (T6 FIX, reflected in `/profile` wording). Whisper via Groq is opt-in and uploads audio.
 
 ## Known gaps
-No VM/container; no live verification of the trial permission rules, `--bare` hook blocking, Telegram, or the router API call; DNS rebinding/redirects are only partly covered; the pairing lockout resets on restart; installer (T9) not yet reviewed; `~/.reelay/config.toml` should be `chmod 600` (suggested to T9, T3 review NIT).
+No VM/container; no live verification of the trial permission rules, `--bare` hook blocking, Telegram, or the router API call; DNS rebinding/redirects are only partly covered; the pairing lockout resets on restart; `install.sh` follows `main` unpinned until a release tag exists; `~/.reelay/config.toml` should be `chmod 600` (done by the installer).
