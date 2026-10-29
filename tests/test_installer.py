@@ -12,7 +12,7 @@ import pytest
 
 from reelay.core.config import load_config
 from reelay.installer import service
-from reelay.installer.checks import tool_checks
+from reelay.installer.checks import Check, tool_checks
 from reelay.installer.cli import main as cli_main
 from reelay.installer.config_file import dumps, save_config
 from reelay.installer.doctor import config_checks, run_doctor
@@ -57,6 +57,7 @@ def make_deps(home, which_missing=(), username=USER, **over):
         which=lambda name: None if name in which_missing else f"/fake/bin/{name}",
         run_command=lambda argv: ran.append(argv) or True,
         get_username=lambda token: username,
+        check_network=lambda: Check("Can reach Telegram", True, "yes"),
         make_code=lambda: next(codes),
         make_qr=lambda data: "<QR of " + data + ">",
         install_service=lambda: "",
@@ -608,3 +609,110 @@ def test_pairing_screens_say_dont_share(home, capsys):
     save_config({"telegram_bot_token": TOKEN, "telegram_bot_username": USER})
     cli_main(["pair"])
     assert "don't share this screen" in capsys.readouterr().out
+
+
+# ---------- network check (live-test follow-up: school filter breaks Telegram TLS) ----------
+
+import socket
+import ssl
+
+from reelay.installer.netcheck import FILTERED, TIMEOUT, UNREACHABLE, check_telegram
+
+
+def raising(exc):
+    def opener(url, timeout):
+        raise exc
+    return opener
+
+
+class OpenedOK:
+    def close(self):
+        pass
+
+
+def test_netcheck_ok_when_telegram_answers_even_with_an_http_error():
+    assert check_telegram(opener=lambda url, timeout: OpenedOK()).ok
+    err = urllib.error.HTTPError("https://api.telegram.org/", 302, "Found", {}, None)
+    assert check_telegram(opener=raising(err)).ok
+
+
+@pytest.mark.parametrize("exc", [
+    urllib.error.URLError(ssl.SSLCertVerificationError("CERTIFICATE_VERIFY_FAILED")),
+    ssl.SSLCertVerificationError("CERTIFICATE_VERIFY_FAILED"),
+    ssl.SSLError("handshake failed"),
+])
+def test_netcheck_certificate_error_says_network_is_filtering(exc):
+    result = check_telegram(opener=raising(exc))
+    assert not result.ok and result.required and result.fix == FILTERED
+    assert "school/work Wi-Fi" in result.fix and "phone hotspot" in result.fix
+
+
+@pytest.mark.parametrize("exc", [
+    urllib.error.URLError(socket.timeout("timed out")),
+    TimeoutError("timed out"),
+    socket.timeout("timed out"),
+])
+def test_netcheck_timeout_says_check_internet(exc):
+    result = check_telegram(opener=raising(exc))
+    assert not result.ok and result.fix == TIMEOUT and "internet connection" in result.fix
+
+
+def test_netcheck_other_failures_say_check_internet():
+    for exc in (urllib.error.URLError(socket.gaierror("no DNS")), ConnectionRefusedError()):
+        result = check_telegram(opener=raising(exc))
+        assert not result.ok and result.fix == UNREACHABLE
+
+
+def test_netcheck_sends_no_token_and_keeps_certificate_checks_on(home):
+    save_config({"telegram_bot_token": TOKEN})
+    seen = []
+    check_telegram(opener=lambda url, timeout: seen.append((url, timeout)) or OpenedOK())
+    assert seen == [("https://api.telegram.org/", 5)]  # bare host, short timeout, no token
+    import inspect
+    from reelay.installer import netcheck
+    source = inspect.getsource(netcheck)
+    assert "CERT_NONE" not in source and "_create_unverified" not in source and "check_hostname" not in source
+
+
+def test_doctor_shows_network_problem_as_required_fix(home):
+    save_config({"telegram_bot_token": TOKEN})
+    blocked = check_telegram(opener=raising(ssl.SSLCertVerificationError("x")))
+    user = FakeUser([])
+    code = run_doctor(user.console(), which=lambda n: "/x/" + n, path=CONFIG(home), extra=[blocked])
+    assert code == 1
+    assert "[FIX ] Can reach Telegram: certificate check failed" in user.screen
+    assert "filtering Telegram" in user.screen and "Start with: This network" in user.screen
+
+
+def test_doctor_default_runs_the_network_check(home, monkeypatch):
+    import reelay.installer.doctor as doctor
+    called = []
+    monkeypatch.setattr(doctor, "check_telegram", lambda: called.append(1) or Check("Can reach Telegram", True, "yes"))
+    monkeypatch.setattr(doctor, "pairing_check", lambda: Check("Telegram pairing", True, "1"))
+    monkeypatch.setattr(doctor, "service_check", lambda: Check("Starts at login", True, "on"))
+    run_doctor(FakeUser([]).console(), which=lambda n: "/x/" + n, path=CONFIG(home))
+    assert called == [1]
+
+
+def test_wizard_stops_before_starting_bot_when_telegram_is_filtered(home):
+    blocked = check_telegram(opener=raising(ssl.SSLCertVerificationError("x")))
+    deps = make_deps(home, check_network=lambda: blocked)
+    user = FakeUser(["", TOKEN, "", "n"])  # token step still works offline-style: username comes from fake
+    assert Wizard(user.console(), deps).run() == 1
+    assert "filtering Telegram" in user.screen and "phone hotspot" in user.screen
+    assert deps.ran == [] and "t.me/" not in user.screen  # no bot started, no pairing link shown
+    assert load_config(CONFIG(home))["telegram_bot_token"] == TOKEN  # settings were still saved
+    assert TOKEN not in user.screen
+
+
+def test_wizard_token_step_explains_filter_instead_of_no_internet(home):
+    blocked = check_telegram(opener=raising(ssl.SSLCertVerificationError("x")))
+    deps = make_deps(home, check_network=lambda: blocked)
+
+    def offline(token):
+        raise NetworkProblem()
+    deps.get_username = offline
+    user = FakeUser(["", TOKEN, "@my_bot", "", "n"])
+    assert Wizard(user.console(), deps).run() == 1
+    assert user.screen.count("filtering Telegram") == 2  # at the token step and again at the end
+    assert "no internet?" not in user.screen

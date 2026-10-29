@@ -9,6 +9,7 @@ from reelay.core.config import ConfigError, config_path, load_config
 
 from . import service
 from .checks import Check, Which, tool_checks
+from .netcheck import check_telegram
 from .ui import Console
 
 
@@ -74,7 +75,7 @@ def service_check(is_running: Callable[[], bool] = service.is_running,
 def run_doctor(io: Console, which: Which = shutil.which, path: Path | None = None,
                extra: list[Check] | None = None) -> int:
     checks = tool_checks(which) + config_checks(path)
-    checks += extra if extra is not None else [pairing_check(), service_check()]
+    checks += extra if extra is not None else [pairing_check(), service_check(), check_telegram()]
     io.say("Reelay doctor")
     io.say("=============")
     for c in checks:

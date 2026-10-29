@@ -18,6 +18,7 @@ from . import service
 from .checks import Check, tool_checks
 from .config_file import save_config
 from .folders import forbidden_reason
+from .netcheck import check_telegram
 from .qr import qr_text
 from .telegram import TOKEN_SHAPE, NetworkProblem, TokenRejected, get_bot_username
 from .ui import Console
@@ -56,6 +57,7 @@ class Deps:
     which: Callable[[str], str | None] = shutil.which
     run_command: Callable[[list[str]], bool] = _run_command  # shows its own output to the user
     get_username: Callable[[str], str] = get_bot_username
+    check_network: Callable[[], Check] = check_telegram
     make_code: Callable[[], str] = _make_code
     make_qr: Callable[[str], str | None] = qr_text
     install_service: Callable[[], str] = service.install  # returns "" or a friendly problem
@@ -90,7 +92,8 @@ class Wizard:
             self.step_api_key(old)
             if not self.step_save():
                 return 1
-            self.step_pair(username)
+            if not self.step_pair(username):
+                return 1
         except (KeyboardInterrupt, EOFError):
             io.say()
             io.say("Setup stopped. Nothing is lost: run  reelay setup  to carry on.")
@@ -158,7 +161,8 @@ class Wizard:
                 io.say("Telegram says that token isn't valid. Copy it again from BotFather's message.")
                 continue
             except NetworkProblem:
-                io.say("I couldn't reach Telegram to check it (no internet?).")
+                net = self.deps.check_network()
+                io.say(net.fix if not net.ok else "I couldn't check the token with Telegram just now.")
                 username = io.ask("Type your bot's username (without the @) to continue anyway, or Enter to retry")
                 if not username:
                     continue
@@ -242,9 +246,15 @@ class Wizard:
         return True
 
     # --- step 6: pairing --------------------------------------------------------------
-    def step_pair(self, username: str) -> None:
+    def step_pair(self, username: str) -> bool:
         io, deps = self.io, self.deps
         io.screen(6, TOTAL_STEPS, "Connect Telegram to this Mac")
+        net = deps.check_network()
+        if not net.ok:
+            io.say(f"✗ {net.fix}")
+            io.say("Your settings are saved. Once Telegram is reachable, type  reelay  to start the bot,")
+            io.say("and  reelay pair  for a pairing code.")
+            return False
         before = deps.paired_count()
         code = deps.make_code()
         link = f"https://t.me/{username}?start={code}"
@@ -258,6 +268,7 @@ class Wizard:
         io.say()
         if self._start_bot(before):
             io.say("All set! Send your bot a video link.")
+        return True
 
     def _start_bot(self, before: int) -> bool:
         """Get the bot running, then wait for the user to press START. True once paired."""
