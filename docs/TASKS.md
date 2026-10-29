@@ -39,4 +39,4 @@ Searched GitHub for Telegram/video/sandbox skills: only 0–2 star repos, not us
 | ID | Task | Owns | Needs | Reviewer | Status |
 |---|---|---|---|---|---|
 | T10 | Second adapter (Codex or Gemini) | `reelay/adapters/<name>.py` | T5 | T5 | todo |
-| T11 | README, demo script, architecture diagram for judges | `README.md`, `docs/DEMO.md` | T8 | orchestrator | review |
+| T11 | README, demo script, architecture diagram for judges | `README.md`, `docs/DEMO.md` | T8 | orchestrator | merged |
