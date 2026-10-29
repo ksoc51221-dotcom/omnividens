@@ -11,8 +11,19 @@ from reelay.core.types import Frame, Profile, VideoBundle
 from reelay.factcheck import fact_check
 from reelay.factcheck.backends import (ApiBackend, ClaudeCodeBackend, make_backend,
                                        result_text)
-from reelay.factcheck.parse import parse_verdict
+from reelay.factcheck import parse as parse_mod
+from reelay.factcheck.parse import good_url, parse_verdict, strip_urls
 from reelay.factcheck.prompt import build_prompt, pick_frames
+
+@pytest.fixture(autouse=True)
+def fake_dns(monkeypatch):
+    """No network: names starting nx- don't resolve, private- resolve to 10.x, the rest are public."""
+    def fake(host):
+        if host.startswith("nx-"):
+            raise OSError("no such host")
+        return ["10.0.0.5"] if host.startswith("private-") else ["93.184.216.34"]
+    monkeypatch.setattr(parse_mod, "_addresses", fake)
+
 
 GOOD = {
     "summary": "A dev shows a handy CLI.",
@@ -155,13 +166,15 @@ def test_claude_code_argv_is_locked_down(bundle):
     argv, cwd, stdin, timeout = calls[0]
     frames_dir = bundle.frames[0].image.parent.resolve()
     assert timeout == 77 and v.claims
-    assert argv[argv.index("--tools") + 1] == "Read,WebSearch,WebFetch"
+    assert argv[argv.index("--tools") + 1] == "Read,WebSearch"
     assert argv[argv.index("--permission-mode") + 1] == "dontAsk"
     allow = argv[argv.index("--allowedTools") + 1].split(",")
-    assert allow == [f"Read(//{str(frames_dir).lstrip('/')}/**)", "WebSearch", "WebFetch"]
-    for banned in ("Bash", "Write", "Edit"):
+    assert allow == [f"Read(//{str(frames_dir).lstrip('/')}/**)", "WebSearch"]
+    for banned in ("Bash", "Write", "Edit", "WebFetch"):
         assert banned not in argv[argv.index("--tools") + 1]
+        assert banned not in argv[argv.index("--allowedTools") + 1]
         assert banned in argv[argv.index("--disallowedTools") + 1]
+    assert argv[argv.index("--setting-sources") + 1] == "project" and "--disable-slash-commands" in argv
     assert "--output-format" in argv and "--no-session-persistence" in argv
     assert "hello world" in stdin and "hello world" not in " ".join(argv)  # data only via stdin
     assert Path(cwd) != frames_dir
@@ -209,3 +222,53 @@ def test_api_backend_sends_images_and_search_tool(bundle):
     assert [b["type"] for b in content] == ["image"] * 3 + ["text"]
     assert kw["tools"][0]["name"] == "web_search" and "web_search" in kw["tools"][0]["type"]
     assert v.claims and v.candidates
+
+
+# --- review fixes (T7 findings) ------------------------------------------
+
+@pytest.mark.parametrize("url", [
+    "https://metadata.google.internal/x", "https://foo.internal/", "https://printer.local/",
+    "https://router.lan/", "https://nas.home.arpa/", "https://intranet/", "https://corp/x",
+    "https://nx-gone.example.com/", "https://private-box.example.com/", "https://1.2.3.4/",
+    "https://2130706433/", "https://0x7f.1/", "https://[::1]/", "https://evil.com/\\@127.0.0.1",
+    "https://example.com:8443/", "http://example.com/", "https://x.onion/",
+])
+def test_good_url_fails_closed(url):
+    assert good_url(url) is None
+
+
+def test_good_url_accepts_public_and_caches_lookups(monkeypatch):
+    calls = []
+    monkeypatch.setattr(parse_mod, "_addresses", lambda h: calls.append(h) or ["93.184.216.34"])
+    cache = {}
+    assert good_url("https://github.com/a/b", cache) and good_url("https://github.com/c/d", cache)
+    assert calls == ["github.com"]
+
+
+def test_dns_that_returns_a_private_address_is_rejected(monkeypatch):
+    monkeypatch.setattr(parse_mod, "_addresses", lambda h: ["93.184.216.34", "127.0.0.1"])
+    assert good_url("https://sneaky.example.com/") is None
+
+
+def test_urls_stripped_from_summary_and_claim_text():
+    raw = json.dumps({"summary": "Official! Go to https://evil.com/login or www.evil.org or evil.io/x now [click](http://a.b/c)",
+                      "claims": [{"text": "Mail me at a@evil.com, see bit.ly/x and github.com/foo", "verdict": "unverified"}]})
+    v = parse_verdict(raw)
+    for text in (v.summary, v.claims[0].text):
+        assert "evil" not in text and "http" not in text and "github.com" not in text and "@" not in text
+    assert "Node.js" in strip_urls("Written in Node.js")
+
+
+def test_tools_have_no_webfetch_and_prompt_says_search_only(bundle):
+    from reelay.factcheck.backends import CLAUDE_TOOLS, DENIED_TOOLS
+    assert "WebFetch" not in CLAUDE_TOOLS and "WebFetch" in DENIED_TOOLS
+    assert "WebFetch" not in build_prompt(bundle, PROFILE, [], [])
+
+
+def test_api_backend_skips_big_frames_before_numbering(bundle):
+    bundle.frames[0].image.write_bytes(b"x" * 5_000_000)
+    client = FakeClient()
+    ApiBackend(client=client).run(bundle, PROFILE)
+    content = client.calls[0]["messages"][0]["content"]
+    assert [b["type"] for b in content] == ["image"] * 2 + ["text"]
+    assert "image 3" not in content[-1]["text"] and "image 2" in content[-1]["text"]

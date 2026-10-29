@@ -21,8 +21,8 @@ DEFAULT_TIMEOUT_S = 300
 API_MODEL = "claude-sonnet-5-5"
 WEB_SEARCH_TOOL = "web_search_20250305"
 # The ceiling of tools for claude-code. Constant on purpose: never add Bash/Write/Edit.
-CLAUDE_TOOLS = "Read,WebSearch,WebFetch"
-DENIED_TOOLS = "Bash,Write,Edit,NotebookEdit,Task"
+CLAUDE_TOOLS = "Read,WebSearch"  # no WebFetch: a tricked model could fetch local or attacker URLs
+DENIED_TOOLS = "Bash,Write,Edit,NotebookEdit,Task,WebFetch"
 
 
 class Backend(Protocol):
@@ -41,10 +41,12 @@ class ClaudeCodeBackend:
 
     def build_argv(self, dirs: list[Path]) -> list[str]:
         """Read-only access to the frame folders; web search/fetch; nothing else."""
-        allow = [f"Read(//{d.as_posix().lstrip('/')}/**)" for d in dirs] + ["WebSearch", "WebFetch"]
+        allow = [f"Read(//{d.as_posix().lstrip('/')}/**)" for d in dirs] + ["WebSearch"]
         argv = [self._binary or shutil.which("claude") or "claude", "-p",
                 "--output-format", "json", "--no-session-persistence",
                 "--permission-mode", "dontAsk", "--strict-mcp-config",
+                # no user-level hooks/settings or skills in this unattended call (cwd is empty)
+                "--setting-sources", "project", "--disable-slash-commands",
                 "--tools", CLAUDE_TOOLS, "--disallowedTools", DENIED_TOOLS,
                 "--allowedTools", ",".join(allow)]
         for d in dirs:
@@ -86,12 +88,10 @@ class ApiBackend:
         if self._client is None:
             import anthropic  # only needed for this backend
             self._client = anthropic.Anthropic(timeout=self._timeout)
-        frames = pick_frames(bundle)
+        frames = [f for f in pick_frames(bundle) if f.image.stat().st_size <= 4_500_000]
         prompt = build_prompt(bundle, profile, frames, [f"image {i + 1}" for i in range(len(frames))])
         content: list[dict] = []
         for f in frames:
-            if f.image.stat().st_size > 4_500_000:
-                continue
             kind = "image/png" if f.image.suffix.lower() == ".png" else "image/jpeg"
             data = base64.standard_b64encode(f.image.read_bytes()).decode()
             content.append({"type": "image", "source": {"type": "base64", "media_type": kind, "data": data}})
