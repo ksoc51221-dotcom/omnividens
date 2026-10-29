@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import ssl
 import sys
 
 from reelay.core.config import ConfigError, load_config
@@ -60,6 +61,44 @@ class TelegramSender:
             "send failed: %s", type(f.exception()).__name__))
 
 
+CERT_HELP = ("Can't reach Telegram securely: this network may be filtering it (school/work Wi-Fi). "
+             "Try another network or a phone hotspot.")
+NET_HELP = "Can't reach Telegram: check your internet connection."
+TOKEN_HELP = "Telegram rejected the bot token. Run  reelay setup  to enter a new one."
+CONFLICT_HELP = "Reelay is already running somewhere else with this bot token. Stop the other copy first."
+
+
+def explain_network_error(error: BaseException) -> str:
+    """One friendly line for a Telegram network failure. Never includes the error text (it can
+    hold the bot token URL) and never suggests turning certificate checks off."""
+    seen = set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        if isinstance(error, ssl.SSLCertVerificationError) or "CERTIFICATE_VERIFY_FAILED" in str(error):
+            return CERT_HELP
+        error = error.__cause__ or error.__context__
+    return NET_HELP
+
+
+def serve(app) -> int:
+    """Run the bot's polling loop; a network failure becomes one message and exit code 1."""
+    from telegram.error import Conflict, InvalidToken, NetworkError  # TimedOut is a NetworkError too
+
+    # Never print the exception text: InvalidToken's message contains the full bot token.
+    try:
+        app.run_polling()
+    except InvalidToken:
+        print(TOKEN_HELP)
+        return 1
+    except Conflict:
+        print(CONFLICT_HELP)
+        return 1
+    except NetworkError as e:
+        print(explain_network_error(e))
+        return 1
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     logging.basicConfig(level=logging.WARNING)
@@ -84,9 +123,10 @@ def main(argv: list[str] | None = None) -> int:
     if "--pair" in argv or not pairing.paired_users():
         print(f"Open your bot in Telegram and send:  /start {pairing.new_code()}  (valid 15 minutes)")
     print("Reelay is running. Press Ctrl+C to stop.")
-    app.run_polling()
-    bot.pipeline.queue.shutdown(wait=False)  # don't hang on a slow video
-    return 0
+    try:
+        return serve(app)
+    finally:
+        bot.pipeline.queue.shutdown(wait=False)  # don't hang on a slow video
 
 
 if __name__ == "__main__":
