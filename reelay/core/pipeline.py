@@ -21,7 +21,6 @@ Safety rules this file keeps (from the module reviews):
 import json
 import logging
 import re
-import shlex
 import shutil
 import tempfile
 import threading
@@ -121,9 +120,9 @@ class UserQueue:
             except Exception:  # noqa: BLE001 - one bad job must not stop the user's queue
                 log.exception("job crashed")
 
-    def shutdown(self) -> None:
+    def shutdown(self, wait: bool = True) -> None:
         if self._pool:
-            self._pool.shutdown(wait=True)
+            self._pool.shutdown(wait=wait, cancel_futures=not wait)
 
 
 class _Remember(OrderedDict):
@@ -203,19 +202,32 @@ def urlhost(url: str) -> str:
     return m.group(1) if m else "unknown host"
 
 
+_GITHUB_REPO = re.compile(r"https://github\.com/([A-Za-z0-9][A-Za-z0-9._-]*)/([A-Za-z0-9][A-Za-z0-9._-]*)")
+
+
+def clone_command(url: str) -> str | None:
+    """A `git clone` line the user may paste, or None. The URL comes from model output about a
+    video, so it is re-checked here: only a plain github.com/<owner>/<repo> link qualifies.
+    The folder name is derived from the repo part. We only print this; we never run it."""
+    m = _GITHUB_REPO.fullmatch(url)
+    if m is None or m.group(2) in (".", "..") or m.group(1) in (".", ".."):
+        return None
+    folder = re.sub(r"[^a-z0-9-]+", "-", m.group(2).lower()).strip("-") or "candidate"
+    return f"git clone -- {url} ~/.claude/skills/{folder}"
+
+
 def adopt_text(candidate: Candidate, scan_verdict: str) -> str:
     """The exact next step after Adopt. We never install into the user's real setup."""
-    name = re.sub(r"[^A-Za-z0-9._-]", "-", candidate.name)[:40].strip("-.") or "candidate"
     head = f"Noted: you adopted {one_line(candidate.name, 60)}. I have NOT installed anything."
     if scan_verdict == "high":
         head += "\n⚠️ The safety scan flagged it as high risk. Read the code before you use it."
-    if candidate.kind == "skill":
-        step = (f"Next step, when you're ready (read its SKILL.md first):\n"
-                f"  git clone {shlex.quote(candidate.url)} ~/.claude/skills/{name}\n"
+    command = clone_command(candidate.url) if candidate.kind == "skill" else None
+    if command:
+        step = (f"Next step, when you're ready (read its SKILL.md first):\n  {command}\n"
                 f"then restart Claude Code.")
     else:
-        step = (f"Next step: open {candidate.url}, read its README, and install it yourself "
-                f"following its instructions.")
+        step = (f"Next step: open {one_line(candidate.url, 200)}, read its README, and install it "
+                f"yourself following its instructions.")
     return f"{head}\n{step}\n{receipt('your tap', 'nothing new', 'nothing', 'to install anything for you')}"
 
 
@@ -241,6 +253,7 @@ class Pipeline:
 
     def submit(self, job: Job) -> None:
         if not self.queue.submit(job.user_id, lambda: self._run_job(job)):
+            _remove_download(job.file)  # nobody will process it, so don't leave it on disk
             self.send(job.user_id, "I still have a few things queued for you. Give me a minute.")
 
     def decide(self, user_id: str, report_id: str, action: str) -> Reply | None:
@@ -436,7 +449,8 @@ class PipelineBot(ReelayBot):
         if word.startswith("/"):
             return self._command(uid, text)
         state = self.quizzes.get(uid)
-        if state and not msg.file and "http" not in text and self._quiz_wants_text(state):
+        if (state and not msg.file and not msg.forwarded and "http" not in text
+                and self._quiz_wants_text(state)):  # forwarded words are not the user's answer
             return self._quiz_step(uid, state, lambda: profiles.answer_text(state, text))
         if profiles.load(uid) is None and uid not in self._offered:  # paired before the quiz existed
             self._offered.add(uid)

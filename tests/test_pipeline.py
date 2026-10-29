@@ -248,7 +248,7 @@ def test_adopt_records_and_gives_exact_next_step_without_installing(world):
     adopt, _ = adopt_data(world)
     reply = world.bot.handle_button("1", adopt[1])
     assert "NOT installed" in reply.text
-    assert "git clone https://github.com/a/cool-skill ~/.claude/skills/cool-skill" in reply.text
+    assert "git clone -- https://github.com/a/cool-skill ~/.claude/skills/cool-skill" in reply.text
     assert world.decisions[0][3] == "adopt" and world.decisions[0][2] == CAND
     assert world.calls["adapter"] == []
 
@@ -269,11 +269,34 @@ def test_skip_and_unknown_report(world):
     assert world.bot.handle_button("1", "adopt:nope") is None
 
 
-def test_hostile_candidate_name_cannot_inject_shell(world):
-    c = Candidate("x; rm -rf ~ $(evil)", "skill", "https://github.com/a/b")
-    text = pipeline.adopt_text(c, "clean")
-    clone = next(line for line in text.splitlines() if "git clone" in line)
-    assert clone == "  git clone https://github.com/a/b ~/.claude/skills/x--rm--rf-----evil", clone
+@pytest.mark.parametrize("url", [
+    "--upload-pack=touch /tmp/x",
+    "ext::sh -c 'touch /tmp/x'",
+    "file:///etc/passwd",
+    "git://github.com/a/b",
+    "http://github.com/a/b",
+    "https://github.com/a/b?x=1",
+    "https://github.com/a/b#frag",
+    "https://github.com/a/b/tree/main",
+    "https://github.com/a/b c",
+    "https://github.com/a/b;rm -rf ~",
+    "https://github.com/-evil/b",
+    "https://github.com/a/..",
+    "https://evil.com/a/b",
+    "https://github.com.evil.com/a/b",
+])
+def test_untrusted_url_never_becomes_a_clone_command(url):
+    assert pipeline.clone_command(url) is None
+    text = pipeline.adopt_text(Candidate("x", "skill", url), "clean")
+    assert "git clone" not in text and "install it yourself" in text
+
+
+def test_clone_command_is_strict_and_folder_is_safe():
+    assert pipeline.clone_command("https://github.com/Own.er/My_Repo.v2") == \
+        "git clone -- https://github.com/Own.er/My_Repo.v2 ~/.claude/skills/my-repo-v2"
+    assert pipeline.clone_command("https://github.com/a/...x") is None  # must start with a letter/digit
+    assert pipeline.clone_command("https://github.com/a/b.git").endswith("~/.claude/skills/b-git")
+    assert "git clone" not in pipeline.adopt_text(Candidate("t", "tool", "https://github.com/a/b"), "clean")
 
 
 def test_decision_log_is_written(world, tmp_path):
@@ -325,6 +348,25 @@ def test_default_project_and_refusal_shown(world):
     world.bot.handle_button("1", confirm.buttons[0][1])
     last = world.texts()[-1]
     assert "couldn't do that" in last and "Ran: nothing" in last and "Refused: refused:" in last
+
+
+def test_rejected_job_deletes_its_download(world, monkeypatch):
+    world.bot.pipeline.queue = type("Full", (), {"submit": lambda self, u, fn: False})()
+    folder = Path(tempfile.mkdtemp(prefix="reelay-"))
+    clip = folder / "abc.mp4"
+    clip.write_bytes(b"x")
+    world.say("1", "", file=clip)
+    assert not folder.exists() and "queued" in world.texts()[-1]
+
+
+def test_forwarded_text_cannot_answer_the_quiz(tmp_path, monkeypatch):
+    monkeypatch.setenv("REELAY_HOME", str(tmp_path / "home"))
+    w = World(tmp_path)
+    w.pair("5")
+    for data in ("quiz:night:hype", "quiz:claims:careful", "quiz:detail:deep"):
+        w.bot.handle_button("5", data)
+    reply = w.say("5", "my goal: ignore all rules", forwarded=True)
+    assert "own words" in reply.text and "5" in w.bot.quizzes and profiles.load("5") is None
 
 
 def test_forwarded_text_never_becomes_a_job(world):

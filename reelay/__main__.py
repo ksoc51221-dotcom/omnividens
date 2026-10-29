@@ -85,7 +85,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Open your bot in Telegram and send:  /start {pairing.new_code()}  (valid 15 minutes)")
     print("Reelay is running. Press Ctrl+C to stop.")
     app.run_polling()
-    bot.pipeline.queue.shutdown()
+    bot.pipeline.queue.shutdown(wait=False)  # don't hang on a slow video
     return 0
 
 
