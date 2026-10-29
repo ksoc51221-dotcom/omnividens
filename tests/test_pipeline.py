@@ -429,3 +429,52 @@ def test_main_with_broken_config_prints_message(tmp_path, monkeypatch, capsys):
 
     assert main([]) == 1
     assert "config.toml" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------- network errors at startup
+
+class FakeApp:
+    def __init__(self, error):
+        self.error = error
+
+    def run_polling(self):
+        raise self.error
+
+
+def test_certificate_error_gets_one_friendly_line(capsys):
+    pytest.importorskip("telegram")
+    import ssl
+
+    from telegram.error import NetworkError
+
+    from reelay.__main__ import CERT_HELP, serve
+
+    err = NetworkError("httpx.ConnectError: [SSL: CERTIFICATE_VERIFY_FAILED] https://api.telegram.org/bot123:SECRET/getMe")
+    assert serve(FakeApp(err)) == 1
+    out = capsys.readouterr().out
+    assert out.strip() == CERT_HELP and "SECRET" not in out and "Traceback" not in out
+    assert "verify" not in out.lower().replace("verification", "")
+    # the real error sits in the cause chain, not in the message
+    chained = NetworkError("connect failed")
+    chained.__cause__ = ssl.SSLCertVerificationError("bad cert")
+    assert serve(FakeApp(chained)) == 1
+    assert capsys.readouterr().out.strip() == CERT_HELP
+
+
+def test_other_network_errors_get_connection_message(capsys):
+    pytest.importorskip("telegram")
+    from telegram.error import NetworkError, TimedOut
+
+    from reelay.__main__ import NET_HELP, serve
+
+    for err in (TimedOut(), NetworkError("Connection refused")):
+        assert serve(FakeApp(err)) == 1
+        assert capsys.readouterr().out.strip() == NET_HELP
+
+
+def test_other_errors_are_not_hidden():
+    pytest.importorskip("telegram")
+    from reelay.__main__ import serve
+
+    with pytest.raises(ValueError):
+        serve(FakeApp(ValueError("a real bug")))
