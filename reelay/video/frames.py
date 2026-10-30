@@ -1,5 +1,6 @@
 """Sample frames with ffmpeg: one every few seconds plus scene cuts, capped."""
 
+import math
 import re
 import shutil
 import subprocess
@@ -7,23 +8,28 @@ from pathlib import Path
 
 from reelay.core.types import Frame
 from reelay.video.errors import FrameError
+from reelay.video.proc import run_tool
 
 SCENE_THRESHOLD = 0.4
+PROBE_TIMEOUT_S = 30
+SCENE_TIMEOUT_S = 120
+FRAME_TIMEOUT_S = 30
 
 
 def probe_duration(video: Path) -> float:
-    """Length in seconds via ffprobe; 0.0 if unknown."""
+    """Length in seconds via ffprobe; 0.0 if unknown (callers must treat 0.0 as unknown)."""
     if shutil.which("ffprobe") is None:
         return 0.0
-    out = subprocess.run(
+    out = run_tool(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
          "-of", "csv=p=0", str(video)],
-        capture_output=True, text=True,
+        PROBE_TIMEOUT_S, capture_output=True, text=True,
     ).stdout.strip()
     try:
-        return float(out)
+        value = float(out)
     except ValueError:
         return 0.0
+    return value if math.isfinite(value) and value > 0 else 0.0
 
 
 def plan_times(duration: float, interval: float, cuts: list[float], max_frames: int) -> list[float]:
@@ -41,10 +47,10 @@ def plan_times(duration: float, interval: float, cuts: list[float], max_frames: 
 
 def find_scene_cuts(video: Path) -> list[float]:
     """Timestamps where the picture changes a lot (ffmpeg scene detection)."""
-    proc = subprocess.run(
-        ["ffmpeg", "-hide_banner", "-i", str(video),
+    proc = run_tool(
+        ["ffmpeg", "-hide_banner", "-t", "600", "-i", str(video),
          "-vf", f"select='gt(scene,{SCENE_THRESHOLD})',showinfo", "-an", "-f", "null", "-"],
-        capture_output=True, text=True,
+        SCENE_TIMEOUT_S, capture_output=True, text=True,
     )
     return [float(m) for m in re.findall(r"pts_time:([\d.]+)", proc.stderr)]
 
@@ -62,10 +68,10 @@ def extract_frames(video: Path, out_dir: Path, interval: float = 2.0,
         if duration and t >= duration:
             continue
         path = out_dir / f"frame_{i:03d}.jpg"
-        subprocess.run(
+        run_tool(
             ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", str(t),
              "-i", str(video), "-frames:v", "1", "-vf", f"scale={width}:-2", str(path)],
-            capture_output=True,
+            FRAME_TIMEOUT_S, capture_output=True,
         )
         if path.exists():
             frames.append(Frame(time_s=t, image=path))
