@@ -37,11 +37,12 @@ class TerminalNetworkError(Exception):
 
 
 def classify(arg: str) -> tuple[str, Job]:
-    """('file' | 'link' | 'instruction', Job). An existing file wins; the rest is the bot's own rule."""
+    """('file' | 'not_video' | 'link' | 'instruction', Job). An existing file wins; the rest is the bot's own rule."""
     text = arg.strip()
     path = Path(text).expanduser()
     if text and path.is_file():
-        return "file", message_to_job(Incoming(USER_ID, "", path.resolve()))
+        kind = "file" if path.suffix.lower() in _VIDEO_EXT else "not_video"
+        return kind, message_to_job(Incoming(USER_ID, "", path.resolve()))
     job = message_to_job(Incoming(USER_ID, text))
     return ("link" if job.url else "instruction"), job
 
@@ -132,6 +133,9 @@ def run_try(arg: str, *, deps: Deps | None = None, stdin: TextIO | None = None, 
     value = arg.strip()
     if not value:
         print(USAGE, file=out)
+        return 1
+    if kind == "not_video":
+        print(f"{Path(value).name} isn't a video file, so I can't watch it.", file=out)
         return 1
     if kind == "instruction" and " " not in value and value.lower().endswith(_VIDEO_EXT):
         print(f"I can't find a file called {value}. Check the path, or paste a link.", file=out)

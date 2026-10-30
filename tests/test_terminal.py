@@ -209,3 +209,11 @@ def test_main_usage_and_flags(fakes, capsys):
     assert main([]) == 1
     assert "Usage" in capsys.readouterr().out
     assert main(["--debug"]) == 1  # a flag alone is not an argument
+
+
+def test_non_video_file_is_refused(fakes, tmp_path):
+    doc = tmp_path / "README.md"
+    doc.write_text("hi")
+    assert classify(str(doc))[0] == "not_video"
+    code, out = run(fakes, str(doc))
+    assert code == 1 and "isn't a video file" in out and not fakes.calls["video"] and not fakes.calls["route"]
