@@ -4,6 +4,7 @@ The terminal is only another `send` callback plus a way to answer buttons; the r
 is `reelay.core.pipeline.Pipeline`. Video content stays data: it is printed, never obeyed.
 """
 
+import logging
 import re
 import sys
 import traceback
@@ -152,20 +153,27 @@ def run_try(arg: str, *, deps: Deps | None = None, stdin: TextIO | None = None, 
     pipeline = Pipeline(_guarded(deps, term), term.send, UserQueue(inline=True))
     waits = interactive if interactive is not None else stdin.isatty()
     waits = waits and not no_input
-    pipeline.submit(job)
-    while term.pending:
-        if not waits:
-            term.say("(choices not answered: run without --no-input in a terminal to pick one)")
-            break
-        print("Choose a number (Enter to stop): ", end="", file=out, flush=True)
-        line = stdin.readline().strip()
-        group = next((g for g in term.pending if line.isdigit() and int(line) in g), None)
-        if group is None:
-            if line:
-                term.say("That isn't one of the choices, so I stopped here.")
-            break
-        term.pending.remove(group)
-        _answer(pipeline, term, group[int(line)])
+    logger = logging.getLogger("reelay")
+    old_level = logger.level
+    if not debug:  # the pipeline logs tracebacks for failed jobs; keep them off the terminal
+        logger.setLevel(logging.CRITICAL + 1)
+    try:
+        pipeline.submit(job)
+        while term.pending:
+            if not waits:
+                term.say("(choices not answered: run without --no-input in a terminal to pick one)")
+                break
+            print("Choose a number (Enter to stop): ", end="", file=out, flush=True)
+            line = stdin.readline().strip()
+            group = next((g for g in term.pending if line.isdigit() and int(line) in g), None)
+            if group is None:
+                if line:
+                    term.say("That isn't one of the choices, so I stopped here.")
+                break
+            term.pending.remove(group)
+            _answer(pipeline, term, group[int(line)])
+    finally:
+        logger.setLevel(old_level)
     return 1 if term.failed else 0
 
 

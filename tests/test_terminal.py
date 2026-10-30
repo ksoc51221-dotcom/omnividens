@@ -217,3 +217,11 @@ def test_non_video_file_is_refused(fakes, tmp_path):
     assert classify(str(doc))[0] == "not_video"
     code, out = run(fakes, str(doc))
     assert code == 1 and "isn't a video file" in out and not fakes.calls["video"] and not fakes.calls["route"]
+
+
+def test_no_traceback_on_stderr_unless_debug(fakes, capsys):
+    fakes.load_error = socket.gaierror("Name or service not known")
+    run(fakes, "https://blocked.example.org/v", interactive=False)
+    assert "Traceback" not in capsys.readouterr().err
+    run(fakes, "https://blocked.example.org/v", interactive=False, debug=True)
+    assert "Traceback" in capsys.readouterr().err
