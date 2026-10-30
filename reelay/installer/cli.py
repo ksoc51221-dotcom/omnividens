@@ -10,6 +10,7 @@ HELP = """Reelay: share a video to your Telegram bot; your AI watches and fact-c
 
   reelay setup            first-time setup wizard (about 5 minutes)
   reelay doctor           check that everything is in place
+  reelay try <link|file|"text">  run one video or instruction here, no Telegram
   reelay pair             show a new pairing code and QR code for another phone
   reelay service install  start Reelay automatically when you log in
   reelay service remove   stop that and delete it
@@ -63,6 +64,10 @@ def main(argv: list[str] | None = None) -> int:
         return Wizard(io).run()
     if command == "doctor":
         return run_doctor(io)
+    if command == "try":
+        from reelay.terminal import main as try_main
+
+        return try_main(argv[1:])
     if command == "pair":
         return _pair(io)
     if command == "service":
