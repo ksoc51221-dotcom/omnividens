@@ -102,3 +102,12 @@ class BrokenClient:
 def test_client_failure_returns_clarification():
     result = route("can you summarise the README for me", BrokenClient())
     assert isinstance(result, Clarification)
+
+
+def test_non_dict_haiku_answer_gets_retry_question():
+    class Bad:
+        def complete(self, system, user):
+            return ["not", "a", "dict"]
+    from reelay.router.router import RETRY_QUESTION
+    result = route("please tidy the garden notes somehow", Bad())
+    assert isinstance(result, Clarification) and result.question == RETRY_QUESTION
