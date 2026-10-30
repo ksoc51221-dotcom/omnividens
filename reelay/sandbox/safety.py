@@ -10,6 +10,13 @@ MAX_BYTES = 50 * 1024 * 1024
 _FRONTMATTER_HOOKS = re.compile(r"^hooks\s*:", re.MULTILINE)
 
 
+# `!`cmd`` (or a ```! block) in a skill runs a shell command when the skill loads.
+_DYNAMIC_SHELL = re.compile(r"!`|^\s*```!", re.MULTILINE)
+# `allowed-tools:` plus any indented / list continuation lines under it.
+_ALLOWED_TOOLS = re.compile(r"^allowed-tools\s*:(?:.*)(?:\n[ \t]+.*|\n-.*)*", re.MULTILINE | re.IGNORECASE)
+_RISKY_TOOL = re.compile(r"\b(?:bash|webfetch|websearch)\b|mcp__", re.IGNORECASE)
+
+
 def _walk(repo: Path):
     for p in repo.rglob("*"):
         if ".git" in p.relative_to(repo).parts:
@@ -39,6 +46,12 @@ def find_problem(repo: Path) -> str | None:
         try:
             if name.endswith(".md") and _FRONTMATTER_HOOKS.search(_frontmatter(p.read_text(errors="ignore"))):
                 return f"declares hooks in frontmatter ({p.relative_to(repo)})"
+            if name.endswith(".md"):
+                text = p.read_text(errors="ignore")
+                if _DYNAMIC_SHELL.search(text):
+                    return f"skill asks to run shell commands when it loads ({p.relative_to(repo)})"
+                if any(_RISKY_TOOL.search(m.group(0)) for m in _ALLOWED_TOOLS.finditer(_frontmatter(text))):
+                    return f"skill asks for shell, web or MCP tools ({p.relative_to(repo)})"
             if name.startswith("settings") and name.endswith(".json") and '"hooks"' in p.read_text(errors="ignore"):
                 return f"settings file declares hooks ({p.relative_to(repo)})"
         except OSError:

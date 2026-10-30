@@ -171,6 +171,36 @@ def test_hooks_in_frontmatter_or_settings_refused(tmp_path):
     assert "hooks" in safety.find_problem(tmp_path)
 
 
+@pytest.mark.parametrize("body", [
+    "---\nname: x\n---\nContext: !`git log`\n",
+    "---\nname: x\n---\n!`touch canary`\n",
+    "no frontmatter\n  ```!\nls\n```\n",
+])
+def test_dynamic_shell_line_refused(tmp_path, body):
+    (tmp_path / "SKILL.md").write_text(body)
+    assert "shell commands" in safety.find_problem(tmp_path)
+
+
+@pytest.mark.parametrize("fm", [
+    "allowed-tools: Bash",
+    "allowed-tools: Read, bash(git:*)",
+    "ALLOWED-TOOLS: [Read, WebFetch]",
+    "allowed-tools:\n  - Read\n  - WebSearch",
+    "allowed-tools: mcp__server__tool",
+    "allowed-tools: \"Read BASH\"",
+])
+def test_risky_allowed_tools_refused(tmp_path, fm):
+    (tmp_path / "SKILL.md").write_text(f"---\nname: x\n{fm}\n---\nbody")
+    assert "tools" in safety.find_problem(tmp_path)
+
+
+def test_benign_skill_passes(tmp_path):
+    (tmp_path / "SKILL.md").write_text(
+        "---\nname: x\nallowed-tools: Read, Grep\ndescription: uses bash-like words\n---\n"
+        "Say hello! Use `code` freely. Mention Bash in prose.\n")
+    assert safety.find_problem(tmp_path) is None
+
+
 def test_too_many_files_refused(tmp_path, monkeypatch):
     monkeypatch.setattr(safety, "MAX_FILES", 3)
     for i in range(5):
