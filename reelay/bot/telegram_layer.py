@@ -41,6 +41,8 @@ MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024  # Telegram's limit for bot downloads
 async def handle_update(bot: ReelayBot, update) -> Reply | None:
     """Turn one Telegram message into a reply. Strangers never trigger a download."""
     message = update.effective_message
+    if update.effective_user is None or message is None:
+        return None  # channel posts / anonymous admins: nobody to answer
     user_id = str(update.effective_user.id)
     text = message.text or message.caption or ""
     command = text.split(maxsplit=1)[0].split("@")[0].lower() if text.strip() else ""
@@ -48,6 +50,8 @@ async def handle_update(bot: ReelayBot, update) -> Reply | None:
         return None  # check pairing BEFORE touching any file
     file_path = None
     attachment = message.video or message.video_note or message.document
+    if attachment is not None and command.startswith("/"):
+        attachment = None  # a command caption never submits a job, so don't fetch a file nobody removes
     if attachment is not None and bot.pairing.is_paired(user_id):
         if (attachment.file_size or 0) > MAX_DOWNLOAD_BYTES:
             return too_big_reply()
@@ -86,8 +90,9 @@ def build_application(bot: ReelayBot, token: str | None = None):
             await query.message.reply_text(reply.text, link_preview_options=_no_preview())
 
     app.add_handler(CallbackQueryHandler(on_button))
-    app.add_handler(MessageHandler(filters.TEXT | filters.VIDEO | filters.VIDEO_NOTE
-                                   | filters.Document.VIDEO, on_message))
+    # UpdateType.MESSAGE = new messages only; an edited message must not re-run the old link/instruction.
+    app.add_handler(MessageHandler(filters.UpdateType.MESSAGE & (
+        filters.TEXT | filters.VIDEO | filters.VIDEO_NOTE | filters.Document.VIDEO), on_message))
     return app
 
 
