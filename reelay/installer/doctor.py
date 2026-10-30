@@ -56,8 +56,8 @@ def pairing_check() -> Check:
 
     try:
         users = Pairing().paired_users()
-    except (OSError, ValueError):
-        return Check("Telegram pairing", False, "pairing file is unreadable", "reelay setup")
+    except (OSError, ValueError, ConfigError):
+        return Check("Telegram pairing", False, "pairing file is unreadable", "delete ~/.reelay/paired.json, then: reelay setup")
     return Check("Telegram pairing", bool(users), f"{len(users)} account(s) paired" if users else "nobody paired yet",
                  "" if users else "reelay pair  (first time: reelay setup)")
 

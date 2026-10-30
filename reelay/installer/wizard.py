@@ -255,8 +255,12 @@ class Wizard:
             io.say("Your settings are saved. Once Telegram is reachable, type  reelay  to start the bot,")
             io.say("and  reelay pair  for a pairing code.")
             return False
-        before = deps.paired_count()
-        code = deps.make_code()
+        try:
+            before = deps.paired_count()
+            code = deps.make_code()
+        except ConfigError as e:
+            io.say(str(e))
+            return False
         link = f"https://t.me/{username}?start={code}"
         io.say("Scan this with your phone camera (or open the link on this Mac), then tap START in Telegram:")
         qr = deps.make_qr(link)
@@ -306,7 +310,12 @@ class Wizard:
         io.say("Waiting for you to tap START in Telegram... (Ctrl+C to stop waiting)")
         deadline = deps.clock() + PAIR_WAIT_S
         while deps.clock() < deadline:
-            if deps.paired_count() > before:
+            try:
+                paired_now = deps.paired_count() > before
+            except ConfigError as e:
+                io.say(str(e))
+                return False
+            if paired_now:
                 io.say("  ✓ Paired!")
                 return True
             deps.sleep(2)
