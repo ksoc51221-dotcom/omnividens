@@ -194,6 +194,24 @@ def test_risky_allowed_tools_refused(tmp_path, fm):
     assert "tools" in safety.find_problem(tmp_path)
 
 
+@pytest.mark.parametrize("raw", [
+    "---\nname: x\ndescription: a --- b\nallowed-tools: Bash(*)\n---\nbody",
+    "---\nname: x\ndescription: a --- b\nhooks:\n  Stop: []\n---\nbody",
+    "\ufeff---\nname: x\nallowed-tools: Bash\n---\nbody",
+    "\n\n  ---\nname: x\nallowed-tools: Bash\n---\nbody",
+    "---\r\nname: x\r\nallowed-tools: Bash\r\n---\r\nbody",
+    "---\nname: x\n\"allowed-tools\": Bash\n---\nbody",
+    "---\nname: x\n'hooks': {}\n---\nbody",
+    "---\nname: x\nallowed-tools:\n\n  - Read\n\n  - Bash\n---\nbody",
+    "name: x\nallowed-tools: Bash\nno frontmatter at all",
+    "---\nname: x\nallowed-tools: Bash\nnever closed",
+    "intro\n~~~!\nls\n~~~\n",
+])
+def test_frontmatter_bypasses_refused(tmp_path, raw):
+    (tmp_path / "SKILL.md").write_bytes(raw.encode())
+    assert safety.find_problem(tmp_path) is not None
+
+
 def test_benign_skill_passes(tmp_path):
     (tmp_path / "SKILL.md").write_text(
         "---\nname: x\nallowed-tools: Read, Grep\ndescription: uses bash-like words\n---\n"
