@@ -27,14 +27,29 @@ def _text(value, limit: int) -> str:
 # Names that only exist on private networks. Checked by suffix because they often don't resolve.
 _INTERNAL_SUFFIXES = (".internal", ".local", ".localhost", ".localdomain", ".lan", ".home", ".home.arpa",
                       ".arpa", ".corp", ".intranet", ".private", ".test", ".invalid", ".onion", ".example")
-_URL_IN_TEXT = re.compile(r"(?:https?://|ftp://|www\.)\S+|\S+@\S+\.\S+|"
-                          r"\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|net|io|ai|dev|app|co|me|ly|xyz|info|"
-                          r"gg|tv|to|sh|cc|ru|cn|gl|link|page|site|online)\b(?:/\S*)?", re.IGNORECASE)
+# What counts as a link in free text: a scheme, "www.", an email, a host followed by a path,
+# or any bare host on a TLD people register (fail closed: evil.sh and evil.ai are stripped).
+# Only an exact allow-list of well-known file/tech names is kept, e.g. install.sh or next.ai.
+_HOST = r"\b[a-z0-9-]+(?:\.[a-z0-9-]+)*"
+_URL_IN_TEXT = re.compile(
+    r"(?:https?://|ftp://|www\.)\S+|\S+@\S+\.\S+|"
+    + _HOST + r"\.[a-z]{2,24}/\S*|"
+    + _HOST + r"\.(?:com|org|net|io|ai|dev|app|co|me|ly|xyz|info|gg|tv|to|sh|cc|ru|cn|gl|link|page|site|"
+    r"online)\b",
+    re.IGNORECASE)
+KEEP_NAMES = frozenset({
+    "install.sh", "setup.sh", "build.sh", "run.sh", "deploy.sh", "start.sh", "test.sh", "bootstrap.sh",
+    "main.cc", "util.cc", "utils.cc", "test.cc", "next.ai", "socket.io", "three.dev",
+})
+
+
+def _replace(m: re.Match) -> str:
+    return m.group(0) if m.group(0).lower() in KEEP_NAMES else "[link removed]"
 
 
 def strip_urls(text: str) -> str:
     """Remove links from free model text; vetted URLs live only in sources/candidates."""
-    return re.sub(r"\s+", " ", _URL_IN_TEXT.sub("[link removed]", text)).replace("]()", "]").strip()
+    return re.sub(r"\s+", " ", _URL_IN_TEXT.sub(_replace, text)).replace("]()", "]").strip()
 
 
 def _addresses(host: str) -> list[str]:
@@ -75,14 +90,21 @@ def good_url(url, cache: dict | None = None) -> str | None:
 
 
 def extract_json(raw: str):
-    """Find the JSON object in the model's text (it may be wrapped in a code fence)."""
-    start, end = raw.find("{"), raw.rfind("}")
-    if start < 0 or end <= start:
-        return None
-    try:
-        return json.loads(raw[start:end + 1])
-    except (json.JSONDecodeError, RecursionError):
-        return None
+    """The first JSON object in the model's text that has a summary string.
+
+    The model may add chatter or a code fence around it, even text with its own braces
+    ("here {as asked}: {...}"), so try to decode an object at every "{".
+    """
+    decoder, pos = json.JSONDecoder(), raw.find("{")
+    while pos >= 0:
+        try:
+            obj, _ = decoder.raw_decode(raw, pos)
+        except (json.JSONDecodeError, RecursionError):
+            obj = None
+        if isinstance(obj, dict) and isinstance(obj.get("summary"), str) and obj["summary"].strip():
+            return obj
+        pos = raw.find("{", pos + 1)
+    return None
 
 
 def _claim(item, duration_s: float, cache: dict) -> Claim | None:

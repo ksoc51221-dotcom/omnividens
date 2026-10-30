@@ -272,3 +272,29 @@ def test_api_backend_skips_big_frames_before_numbering(bundle):
     content = client.calls[0]["messages"][0]["content"]
     assert [b["type"] for b in content] == ["image"] * 2 + ["text"]
     assert "image 3" not in content[-1]["text"] and "image 2" in content[-1]["text"]
+
+
+# --- parse fixes (R-11, R-12) --------------------------------------------
+
+@pytest.mark.parametrize("raw", [
+    'Here is the result {as asked}:\n{"summary":"ok"}',
+    '{ oops "x" }\n```json\n{"summary":"ok"}\n```',
+    '{"note": 1} then {"summary":"ok","claims":[]} and {"summary":"later"}',
+])
+def test_json_found_after_stray_braces(raw):
+    assert parse_verdict(raw).summary == "ok"
+
+
+def test_json_without_summary_still_fails_safe():
+    v = parse_verdict('prefix {"claims": []} {"summary": ""}')
+    assert "couldn't fact-check" in v.summary
+
+
+def test_known_file_names_survive_but_links_do_not():
+    kept = "Run install.sh, edit main.cc, try next.ai, written in Node.js and index.html"
+    assert strip_urls(kept) == kept
+    for link in ("https://x.com/a", "http://127.0.0.1/x", "www.evil.sh", "evil.sh/steal", "main.cc/x?q=1",
+                 "see evil.com now", "pay.io", "a@b.com", "[t](https://e.com)",
+                 "evil.ai", "evil.sh", "evil.cc", "evil.to", "my-install.sh", "evil.install.sh", "Evil.AI"):
+        out = strip_urls(f"Visit {link} today")
+        assert "[link removed]" in out and "evil" not in out.lower() and "://" not in out, link
