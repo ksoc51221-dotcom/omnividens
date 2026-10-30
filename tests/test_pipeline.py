@@ -492,3 +492,42 @@ def test_rejected_token_never_printed(capsys):
     assert out.strip() == TOKEN_HELP and "SECRET" not in out and "Traceback" not in out
     assert serve(FakeApp(Conflict("terminated by other getUpdates request"))) == 1
     assert capsys.readouterr().out.strip() == CONFLICT_HELP
+
+
+# ---------------------------------------------------------------- T14 small fixes
+
+def test_receipt_has_no_none_without_a_project(world):
+    world.route_result = Instruction(task="do the thing now", project=None)
+    world.bot.pipeline.deps.default_project = None
+    world.adapter_result = AdapterResult(ok=False, error="boom")
+    world.say("1", "do the thing now")
+    world.bot.handle_button("1", world.sent[-1][1].buttons[0][1])
+    assert "None" not in world.texts()[-1]
+
+
+def test_corrupt_profile_still_gets_a_reply(world, monkeypatch):
+    world.say("1", "summarise the README please")
+    run = world.sent[-1][1].buttons[0][1]
+
+    def boom(uid):
+        raise ValueError("corrupt")
+    monkeypatch.setattr(profiles, "load", boom)
+    world.bot.handle_button("1", run)
+    assert "It says hi." in world.texts()[-1]
+
+
+def test_unclear_is_written_under_the_lock(world):
+    pl = world.bot.pipeline
+
+    class Spy(dict):
+        def __setitem__(self, k, v):
+            assert pl._lock.locked()
+            super().__setitem__(k, v)
+
+        def pop(self, *a):
+            assert pl._lock.locked()
+            return super().pop(*a)
+    pl._unclear = Spy()
+    world.route_result = Clarification("Which file?")
+    world.say("1", "fix it")
+    assert pl._unclear["1"] == "fix it"

@@ -300,7 +300,11 @@ class Pipeline:
         self.send(user_id, profiles.style(text, profile))
 
     def _profile(self, user_id: str) -> Profile:
-        return profiles.load(user_id) or Profile(user_id=user_id)
+        try:
+            return profiles.load(user_id) or Profile(user_id=user_id)
+        except Exception:  # noqa: BLE001  a corrupt profile must not silence the reply
+            log.exception("could not read profile for user %s", user_id)
+            return Profile(user_id=user_id)
 
     def _learn(self, user_id: str, typed_text: str) -> None:
         """Count topics from text the user typed (never video text), if they have a profile."""
@@ -371,13 +375,15 @@ class Pipeline:
         """Typed text -> router -> a clarifying question, or a one-tap confirm."""
         uid = job.user_id
         text = job.text
-        before = self._unclear.pop(uid, None)  # the user is answering our question
+        with self._lock:
+            before = self._unclear.pop(uid, None)  # the user is answering our question
         if before:
             text = f"{before}\n{text}"[:1000]
         self._learn(uid, job.text)
         routed = self.deps.route(text)
         if isinstance(routed, Clarification):
-            self._unclear[uid] = text
+            with self._lock:
+                self._unclear[uid] = text
             self.send(uid, routed.question)
             return
         if routed.project is None and self.deps.default_project is not None:
@@ -402,7 +408,8 @@ class Pipeline:
             self.send(uid, f"Something went wrong while running that ({type(e).__name__}). Nothing else was changed.")
             return
         refused = one_line(result.error, 200) if result.error.startswith("refused") else "nothing"
-        ran = "nothing" if refused != "nothing" else f"{self.deps.adapter_name} in {instruction.project}"
+        where = f" in {instruction.project}" if instruction.project else ""
+        ran = "nothing" if refused != "nothing" else f"{self.deps.adapter_name}{where}"
         line = receipt("only your message", "the project is on your allow-list", ran, refused)
         if result.ok:
             body = result.text.strip() or "(it finished without any output)"
@@ -471,7 +478,8 @@ class PipelineBot(ReelayBot):
         word = text.split()[0].split("@")[0].lower()
         if word == "/forget":  # also drop what we hold in memory
             self.quizzes.pop(uid, None)
-            self.pipeline._unclear.pop(uid, None)
+            with self.pipeline._lock:
+                self.pipeline._unclear.pop(uid, None)
         if word == "/quiz":
             self.quizzes[uid] = profiles.QuizState()
         return Reply(step.text, step.buttons)

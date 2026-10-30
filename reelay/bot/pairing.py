@@ -10,7 +10,7 @@ import secrets
 import time
 from pathlib import Path
 
-from reelay.core.config import reelay_home
+from reelay.core.config import ConfigError, reelay_home
 
 # No 0/O/1/I so codes are easy to read aloud or type.
 _ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -29,7 +29,10 @@ class Pairing:
 
     def _load(self) -> dict:
         if self.path.exists():
-            return json.loads(self.path.read_text())
+            try:
+                return json.loads(self.path.read_text())
+            except ValueError as e:
+                raise ConfigError(f"{self.path} is corrupt ({e}). Delete it and run `reelay setup` to pair again.") from None
         return {"users": [], "codes": {}}
 
     def _save(self) -> None:
