@@ -12,11 +12,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
-from reelay.video.errors import DownloadError, TooLongError
+from reelay.video.errors import DownloadError, NetworkError, TooLongError
 
 VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".mov", ".m4v"}
 MAX_FILESIZE = "200M"
 MAX_DURATION_S = 600
+
+# Fragments of yt-dlp error text that mean "could not reach the host", not "unsupported page".
+_NETWORK_HINTS = (
+    "certificate_verify_failed", "ssl:", "name or service not known",
+    "temporary failure in name resolution", "nodename nor servname",
+    "getaddrinfo failed", "connection refused", "connection reset",
+    "network is unreachable", "timed out", "failed to establish a new connection",
+)
 
 
 @dataclass
@@ -55,7 +63,9 @@ def download(url: str, out_dir: Path, timeout_s: int = 180) -> Downloaded:
     cmd = [
         "yt-dlp", "--no-playlist", "--ignore-errors", "--no-warnings",
         "--max-filesize", MAX_FILESIZE,
-        "--match-filter", f"duration<={MAX_DURATION_S}",
+        # "<=?" lets videos with no duration metadata (plain .mp4 links) through;
+        # pipeline.py re-checks the real length with ffprobe after download.
+        "--match-filter", f"duration<=?{MAX_DURATION_S}",
         "-f", "bv*[height<=720]+ba/b[height<=720]/bv+ba/b",
         "--merge-output-format", "mp4",
         "--write-info-json", "--write-subs", "--write-auto-subs",
@@ -67,12 +77,15 @@ def download(url: str, out_dir: Path, timeout_s: int = 180) -> Downloaded:
         # though the video arrived, so we judge success by the file, not the code.
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
     except subprocess.TimeoutExpired as exc:
-        raise DownloadError(f"download timed out after {timeout_s}s") from exc
+        raise NetworkError(f"download timed out after {timeout_s}s", urlparse(url).hostname or "") from exc
     video = _find_video(out_dir)
     if video is None:
         err = proc.stderr or ""
         if "does not pass filter" in err or "larger than max-filesize" in err:
             raise TooLongError(f"video is over {MAX_DURATION_S // 60} min or {MAX_FILESIZE}")
+        if any(hint in err.lower() for hint in _NETWORK_HINTS):
+            raise NetworkError("host unreachable: " + (err.strip().splitlines() or [""])[-1],
+                               urlparse(url).hostname or "")
         tail = (proc.stderr or "").strip().splitlines()[-1:] or ["no output"]
         raise DownloadError(f"yt-dlp produced no video: {tail[0]}")
     subs = sorted(out_dir.glob("video*.vtt"))

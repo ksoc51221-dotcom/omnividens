@@ -16,6 +16,18 @@ class DownloadError(VideoError):
     )
 
 
+class NetworkError(DownloadError):
+    """We couldn't reach the host (DNS, SSL, blocked network, timeout)."""
+
+    def __init__(self, message: str, host: str = ""):
+        super().__init__(message)
+        where = host or "that site"
+        self.user_message = (
+            f"I couldn't reach {where} from this network. "
+            "Try again on another network (e.g. phone hotspot), or send a screen recording."
+        )
+
+
 class FrameError(VideoError):
     """ffmpeg could not read frames from the file."""
 

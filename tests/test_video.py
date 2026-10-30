@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from reelay.video import DownloadError, FrameError, TooLongError, load_video
+from reelay.video import DownloadError, FrameError, NetworkError, TooLongError, load_video
 from reelay.video import download as dl
 from reelay.video import pipeline
 from reelay.video.frames import plan_times
@@ -139,7 +139,7 @@ def test_download_passes_caps_to_ytdlp(tmp_path, monkeypatch):
     monkeypatch.setattr(dl, "is_private_host", lambda u: False)
     with pytest.raises(DownloadError):
         dl.download("https://example.com/v", tmp_path)
-    assert "200M" in seen["cmd"] and "duration<=600" in seen["cmd"]
+    assert "200M" in seen["cmd"] and "duration<=?600" in seen["cmd"]
 
 
 @needs_ffmpeg
@@ -161,3 +161,41 @@ def test_groq_key_from_env_then_toml(tmp_path, monkeypatch):
     monkeypatch.delenv("GROQ_API_KEY")
     (tmp_path / "config.toml").write_text("not = valid = toml")
     assert load_groq_key() is None  # broken config means no key, no crash
+
+
+def _fake_ytdlp(monkeypatch, stderr):
+    class Proc:
+        returncode, stdout = 1, ""
+    Proc.stderr = stderr
+    monkeypatch.setattr(dl.subprocess, "run", lambda *a, **k: Proc())
+    monkeypatch.setattr(dl, "is_private_host", lambda u: False)
+
+
+@pytest.mark.parametrize("stderr", [
+    "ERROR: [generic] Unable to download webpage: SSL: CERTIFICATE_VERIFY_FAILED",
+    "ERROR: <urlopen error [Errno 8] nodename nor servname provided, or not known>",
+    "ERROR: Connection refused",
+])
+def test_network_failure_names_host_and_never_suggests_insecure(stderr, tmp_path, monkeypatch):
+    _fake_ytdlp(monkeypatch, stderr)
+    with pytest.raises(NetworkError) as err:
+        dl.download("https://videos.example.com/a.mp4", tmp_path)
+    msg = err.value.user_message
+    assert "videos.example.com" in msg and "another network" in msg
+    assert "certificate" not in msg.lower() and "insecure" not in msg.lower()
+
+
+def test_unsupported_page_keeps_screen_recording_advice(tmp_path, monkeypatch):
+    _fake_ytdlp(monkeypatch, "ERROR: Unsupported URL: https://example.com/page")
+    with pytest.raises(DownloadError) as err:
+        dl.download("https://example.com/page", tmp_path)
+    assert not isinstance(err.value, NetworkError)
+    assert "screen recording" in err.value.user_message
+
+
+def test_missing_duration_is_not_rejected(clip, tmp_path, monkeypatch):
+    """A link whose metadata has no duration still downloads; length is checked afterwards."""
+    sub = None
+    monkeypatch.setattr(pipeline, "download", lambda url, d: dl.Downloaded(clip, sub, ""))
+    monkeypatch.setattr(pipeline, "load_groq_key", lambda: None)
+    assert load_video("https://example.com/plain.mp4", tmp_path).duration_s > 5
