@@ -1,5 +1,6 @@
 """Sample frames with ffmpeg: one every few seconds plus scene cuts, capped."""
 
+import math
 import re
 import shutil
 import subprocess
@@ -12,7 +13,7 @@ SCENE_THRESHOLD = 0.4
 
 
 def probe_duration(video: Path) -> float:
-    """Length in seconds via ffprobe; 0.0 if unknown."""
+    """Length in seconds via ffprobe; 0.0 if unknown (callers must treat 0.0 as unknown)."""
     if shutil.which("ffprobe") is None:
         return 0.0
     out = subprocess.run(
@@ -21,9 +22,10 @@ def probe_duration(video: Path) -> float:
         capture_output=True, text=True,
     ).stdout.strip()
     try:
-        return float(out)
+        value = float(out)
     except ValueError:
         return 0.0
+    return value if math.isfinite(value) and value > 0 else 0.0
 
 
 def plan_times(duration: float, interval: float, cuts: list[float], max_frames: int) -> list[float]:
@@ -42,7 +44,7 @@ def plan_times(duration: float, interval: float, cuts: list[float], max_frames: 
 def find_scene_cuts(video: Path) -> list[float]:
     """Timestamps where the picture changes a lot (ffmpeg scene detection)."""
     proc = subprocess.run(
-        ["ffmpeg", "-hide_banner", "-i", str(video),
+        ["ffmpeg", "-hide_banner", "-t", "600", "-i", str(video),
          "-vf", f"select='gt(scene,{SCENE_THRESHOLD})',showinfo", "-an", "-f", "null", "-"],
         capture_output=True, text=True,
     )

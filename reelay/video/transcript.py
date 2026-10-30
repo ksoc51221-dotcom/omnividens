@@ -84,7 +84,7 @@ def whisper_transcribe(video: Path, work_dir: Path, api_key: str) -> str:
     """Extract small mono mp3, send to Groq Whisper, return '[m:ss] text' lines. '' on failure."""
     audio = work_dir / "audio.mp3"
     subprocess.run(
-        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(video),
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-t", "600", "-i", str(video),
          "-vn", "-ac", "1", "-ar", "16000", "-b:a", "64k", str(audio)],
         capture_output=True,
     )

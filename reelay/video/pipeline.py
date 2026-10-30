@@ -5,7 +5,7 @@ from pathlib import Path
 
 from reelay.core.types import VideoBundle
 from reelay.video.download import MAX_DURATION_S, Downloaded, download, is_url
-from reelay.video.errors import DownloadError, TooLongError
+from reelay.video.errors import DownloadError, FrameError, TooLongError
 from reelay.video.frames import extract_frames, probe_duration
 from reelay.video.transcript import (
     has_audio, load_groq_key, read_subtitle, whisper_transcribe,
@@ -39,6 +39,8 @@ def load_video(source: str | Path, work_dir: Path | None = None, *,
         got, url = Downloaded(video=path), None
 
     duration = probe_duration(got.video)
+    if not duration > 0:  # fail closed: ffprobe missing, N/A, NaN or unreadable
+        raise FrameError("could not determine the video length")
     if duration > MAX_DURATION_S:
         raise TooLongError(f"video is {duration:.0f}s, max is {MAX_DURATION_S}s")
     frames = extract_frames(got.video, work / "frames", interval, max_frames)
