@@ -66,5 +66,8 @@ Private/loopback/link-local hosts rejected before yt-dlp (T2 FIX 1); ≤ 200 MB 
 - Token and keys only in `~/.reelay/config.toml`, never in code/git; `ConfigError` shows the path, not contents. httpx logs (which contain the token in URLs) are pinned to WARNING.
 - Profile: `0600`, size-bounded, `/forget` deletes it. Goals and vibe are sent to Claude when it checks a video (T6 FIX, reflected in `/profile` wording). Whisper via Groq is opt-in and uploads audio.
 
+## Skill scan heuristics
+The trial scan rejects markdown that contains `` !`cmd` `` / ```` ```! ```` shell lines or an `allowed-tools` naming Bash, WebFetch, WebSearch or MCP tools, plus `hooks:`. These checks are regex heuristics (not a YAML parser) that sit alongside `--tools`; they fail closed and may reject harmless markdown, and they are not a guarantee.
+
 ## Known gaps
-No VM/container; no live verification of the trial permission rules, `--bare` hook blocking, Telegram, or the router API call; DNS rebinding/redirects are only partly covered; the pairing lockout resets on restart; `install.sh` follows `main` unpinned until a release tag exists; `~/.reelay/config.toml` should be `chmod 600` (done by the installer).
+No VM/container; no live verification of the trial permission rules, `--bare` hook blocking, Telegram, or the router API call; DNS rebinding/redirects are only partly covered (`is_private_host` checks only the first hop, and yt-dlp follows redirects, so a public URL that redirects to a private address is not caught); the pairing lockout resets on restart; `install.sh` follows `main` unpinned until a release tag exists; `~/.reelay/config.toml` should be `chmod 600` (done by the installer).
