@@ -39,3 +39,10 @@ Suite on the branch: 315 pass. Read `download.py`, `errors.py`, `pipeline.py`, `
 - ERROR lines can still contain the user's URL text, so a path with `ssl:` is shown as a network problem. Cosmetic.
 
 **Verdict: not approved yet.** One fix: use the raw hostname in `is_private_host`, with the IPv6 tests. Everything else is good, so no further re-review is needed after that: sign-off by diff is enough.
+
+## Sign-off by T6 (agent/t1-download-fix @ 362023d, diff vs 03fee99; 334 tests pass)
+- `is_private_host` uses the raw `urlparse(url).hostname` again; `safe_host` is for messages only. I ran all four IPv6 forms plus `[::1]` on the branch: all True.
+- Tests cover `[::ffff:127.0.0.1]`, `[fd00::1]`, `[fe80::1]`, `[::ffff:10.0.0.1]`, `[::1]`, `[::]`, `0.0.0.0`, and the `download()` refusal path. Extra: IPv4-mapped unwrapping, multicast/unspecified blocked.
+- `killpg` wrapped in `try/except OSError`.
+
+**APPROVED** by T6.
