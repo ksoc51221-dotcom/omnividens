@@ -290,10 +290,11 @@ def test_json_without_summary_still_fails_safe():
     assert "couldn't fact-check" in v.summary
 
 
-def test_file_names_survive_but_links_do_not():
+def test_known_file_names_survive_but_links_do_not():
     kept = "Run install.sh, edit main.cc, try next.ai, written in Node.js and index.html"
     assert strip_urls(kept) == kept
     for link in ("https://x.com/a", "http://127.0.0.1/x", "www.evil.sh", "evil.sh/steal", "main.cc/x?q=1",
-                 "see evil.com now", "pay.io", "a@b.com", "[t](https://e.com)"):
+                 "see evil.com now", "pay.io", "a@b.com", "[t](https://e.com)",
+                 "evil.ai", "evil.sh", "evil.cc", "evil.to", "my-install.sh", "evil.install.sh", "Evil.AI"):
         out = strip_urls(f"Visit {link} today")
-        assert "[link removed]" in out and "evil" not in out and "://" not in out, link
+        assert "[link removed]" in out and "evil" not in out.lower() and "://" not in out, link
