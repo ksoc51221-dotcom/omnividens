@@ -40,6 +40,6 @@ Searched GitHub for Telegram/video/sandbox skills: only 0–2 star repos, not us
 |---|---|---|---|---|---|
 | T10 | Second adapter (Codex or Gemini) | `reelay/adapters/<name>.py` | T5 | T5 | todo |
 | T12 | Terminal mode: `reelay try <link/file/"instruction">` runs the full pipeline and prints replies, buttons as numbered choices; no Telegram | `reelay/terminal/`, `tests/test_terminal.py`, one dispatch line in `reelay/installer/cli.py` | T8, T9 | T8 | merged |
-| T13 | Bug sweep (security): R-6 skill `!`/allowed-tools rejection in sandbox scan, R-8 redirect note in SECURITY.md — from `BUG-REPORT-2026-10-30.md` §A | `reelay/sandbox/safety.py`, `tests/test_sandbox.py`, `docs/SECURITY.md` | T4 | T4 | review |
-| T14 | Bug sweep (bot/pipeline/router): R-1 edited messages, R-2 no user, R-3 command-caption cleanup, R-9 small items | `reelay/bot/`, `reelay/core/pipeline.py`, `reelay/router/`, their tests | T3, T8, T2 | T3 | review |
+| T13 | Bug sweep (security): R-6 skill `!`/allowed-tools rejection in sandbox scan, R-8 redirect note in SECURITY.md — from `BUG-REPORT-2026-10-30.md` §A | `reelay/sandbox/safety.py`, `tests/test_sandbox.py`, `docs/SECURITY.md` | T4 | T4 | merged |
+| T14 | Bug sweep (bot/pipeline/router): R-1 edited messages, R-2 no user, R-3 command-caption cleanup, R-9 small items | `reelay/bot/`, `reelay/core/pipeline.py`, `reelay/router/`, their tests | T3, T8, T2 | T3 | merged |
 | T11 | README, demo script, architecture diagram for judges | `README.md`, `docs/DEMO.md` | T8 | orchestrator | merged |
