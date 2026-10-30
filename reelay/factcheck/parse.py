@@ -27,9 +27,15 @@ def _text(value, limit: int) -> str:
 # Names that only exist on private networks. Checked by suffix because they often don't resolve.
 _INTERNAL_SUFFIXES = (".internal", ".local", ".localhost", ".localdomain", ".lan", ".home", ".home.arpa",
                       ".arpa", ".corp", ".intranet", ".private", ".test", ".invalid", ".onion", ".example")
-_URL_IN_TEXT = re.compile(r"(?:https?://|ftp://|www\.)\S+|\S+@\S+\.\S+|"
-                          r"\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|net|io|ai|dev|app|co|me|ly|xyz|info|"
-                          r"gg|tv|to|sh|cc|ru|cn|gl|link|page|site|online)\b(?:/\S*)?", re.IGNORECASE)
+# What counts as a link in free text: a scheme, "www.", an email, a host followed by a path
+# (any TLD), or a bare host with a TLD that is not also a common file extension. Bare names
+# like install.sh, main.cc, next.ai or Node.js are left alone; they read as files, not links.
+_HOST = r"\b[a-z0-9-]+(?:\.[a-z0-9-]+)*"
+_URL_IN_TEXT = re.compile(
+    r"(?:https?://|ftp://|www\.)\S+|\S+@\S+\.\S+|"
+    + _HOST + r"\.[a-z]{2,24}/\S*|"
+    + _HOST + r"\.(?:com|org|net|io|co|me|ly|xyz|info|gg|tv|gl|dev|app|link|page|site|online|ru|cn)\b",
+    re.IGNORECASE)
 
 
 def strip_urls(text: str) -> str:
@@ -75,14 +81,21 @@ def good_url(url, cache: dict | None = None) -> str | None:
 
 
 def extract_json(raw: str):
-    """Find the JSON object in the model's text (it may be wrapped in a code fence)."""
-    start, end = raw.find("{"), raw.rfind("}")
-    if start < 0 or end <= start:
-        return None
-    try:
-        return json.loads(raw[start:end + 1])
-    except (json.JSONDecodeError, RecursionError):
-        return None
+    """The first JSON object in the model's text that has a summary string.
+
+    The model may add chatter or a code fence around it, even text with its own braces
+    ("here {as asked}: {...}"), so try to decode an object at every "{".
+    """
+    decoder, pos = json.JSONDecoder(), raw.find("{")
+    while pos >= 0:
+        try:
+            obj, _ = decoder.raw_decode(raw, pos)
+        except (json.JSONDecodeError, RecursionError):
+            obj = None
+        if isinstance(obj, dict) and isinstance(obj.get("summary"), str) and obj["summary"].strip():
+            return obj
+        pos = raw.find("{", pos + 1)
+    return None
 
 
 def _claim(item, duration_s: float, cache: dict) -> Claim | None:
