@@ -37,6 +37,12 @@ def is_network_error(error: BaseException) -> bool:
 def host_of(error: BaseException, fallback: str = "") -> str:
     """Best guess at the host that failed: from the error if it says, else the link given."""
     for e in _chain(error):
+        named = getattr(e, "host", None)  # an error type that carries its host
+        if isinstance(named, str) and named:
+            return named
+        said = re.search(r"reach (\S+) from", getattr(e, "user_message", ""))  # T1's NetworkError wording
+        if said and said.group(1) != "that":
+            return said.group(1)
         url = getattr(getattr(e, "request", None), "url", None) or getattr(e, "url", None)
         host = getattr(url, "host", None) or (urlparse(url).hostname if isinstance(url, str) else None)
         if host:

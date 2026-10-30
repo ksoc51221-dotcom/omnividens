@@ -12,6 +12,7 @@ from reelay.core.pipeline import Deps
 from reelay.core.types import Candidate, Claim, Frame, Instruction, TrialReport, Verdict, VideoBundle
 from reelay.terminal import classify, main, run_try
 from reelay.terminal.netfail import explain
+from reelay.video import VideoError
 
 CAND = Candidate("cool-skill", "skill", "https://github.com/a/cool-skill")
 
@@ -66,10 +67,13 @@ def run(fakes, arg, stdin="", **kw):
 def test_classify(tmp_path):
     clip = tmp_path / "a.mp4"
     clip.write_bytes(b"x")
-    assert classify(str(clip)) == ("file", str(clip.resolve()))
-    assert classify("https://example.com/v") == ("link", "https://example.com/v")
+    kind, job = classify(str(clip))
+    assert kind == "file" and job.file == clip.resolve()
+    kind, job = classify("https://example.com/v")
+    assert kind == "link" and job.url == "https://example.com/v"
     assert classify("summarise the README, use opus")[0] == "instruction"
-    assert classify("https://example.com/v with words")[0] == "instruction"
+    kind, job = classify("look at https://example.com/v please")  # same rule as the bot
+    assert kind == "link" and job.url == "https://example.com/v" and job.text == "look at  please"
 
 
 def test_link_runs_video_pipeline(fakes):
@@ -114,6 +118,42 @@ def test_choice_skip(fakes):
 def test_cancel_runs_nothing(fakes):
     _, out = run(fakes, "do a thing", stdin="2\n", interactive=True)
     assert not fakes.calls["adapter"] and "Cancelled" in out
+
+
+def test_two_candidates_each_answerable(fakes):
+    fakes.fact_check = lambda b, p: Verdict("ok", [], [CAND, Candidate("other", "tool", "https://github.com/b/other")])
+    _, out = run(fakes, "https://example.com/v", stdin="2\n3\n", interactive=True)
+    assert "1) Adopt  2) Skip" in out and "3) Adopt  4) Skip" in out
+    assert [d[3] for d in fakes.decisions] == ["skip", "adopt"]
+    assert {d[2].name for d in fakes.decisions} == {"cool-skill", "other"}
+
+
+def test_exit_code_one_on_failures(fakes):
+    assert run(fakes, "https://example.com/v", interactive=False)[0] == 0
+    fakes.load_error = socket.gaierror("x")
+    assert run(fakes, "https://example.com/v", interactive=False)[0] == 1
+    fakes.load_error = VideoError("bad")
+    assert run(fakes, "https://example.com/v", interactive=False)[0] == 1
+
+
+def test_exit_code_one_on_adapter_refusal(fakes):
+    fakes.run_adapter = lambda i: AdapterResult(ok=False, error="refused: not allowed")
+    code, _ = run(fakes, "do a thing", stdin="1\n", interactive=True)
+    assert code == 1
+
+
+def test_new_network_error_type_names_host(fakes):
+    class NetworkError(VideoError):  # shape of T1's reelay.video.errors.NetworkError
+        user_message = "I couldn't reach cdn.example.net from this network."
+    fakes.load_error = NetworkError("dns")
+    _, out = run(fakes, "https://example.com/v", interactive=False)
+    assert "cdn.example.net" in out and "Something went wrong" not in out
+
+
+def test_bidi_overrides_stripped(fakes):
+    fakes.fact_check = lambda b, p: Verdict("a\u202eb\u2066c", [], [])
+    _, out = run(fakes, "https://example.com/v", interactive=False)
+    assert "\u202e" not in out and "\u2066" not in out
 
 
 def test_bad_or_empty_choice_stops(fakes):

@@ -7,11 +7,12 @@ is `reelay.core.pipeline.Pipeline`. Video content stays data: it is printed, nev
 import re
 import sys
 import traceback
+from urllib.parse import urlparse
 from dataclasses import replace
 from pathlib import Path
 from typing import TextIO
 
-from reelay.bot import ADOPT, SKIP, Reply
+from reelay.bot import ADOPT, SKIP, Incoming, Reply, message_to_job
 from reelay.core.config import ConfigError
 from reelay.core.pipeline import CANCEL, RUN, Deps, Pipeline, UserQueue
 from reelay.core.types import Job, JobKind
@@ -21,11 +22,13 @@ USER_ID = "terminal"
 USAGE = ('Usage:  reelay try <video link | video file | "typed instruction"> [--no-input] [--debug]\n'
          '  reelay try https://example.com/clip\n'
          '  reelay try ./clip.mp4\n'
-         '  reelay try "summarise the README, use opus"')
+         '  reelay try "summarise the README, use opus"\n'
+         'More: docs/DEMO.md')
 _URL = re.compile(r"^https?://\S+$", re.IGNORECASE)
 _VIDEO_EXT = (".mp4", ".mov", ".webm", ".mkv", ".m4v", ".avi")
 _TAGS = re.compile(r"</?(?:b|i|u|s|code|pre|em|strong)>")
-_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")  # keeps \n and \t; blocks terminal escapes
+# keeps \n and \t; blocks terminal escapes and bidi overrides that could disguise text
+_CONTROL = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 _NET_MARK = "TerminalNetworkError"
 
 
@@ -33,15 +36,14 @@ class TerminalNetworkError(Exception):
     """Raised by the wrapped deps after a network failure was explained to the user."""
 
 
-def classify(arg: str) -> tuple[str, str]:
-    """('file' | 'link' | 'instruction', value). An existing file wins, then http(s)://."""
+def classify(arg: str) -> tuple[str, Job]:
+    """('file' | 'link' | 'instruction', Job). An existing file wins; the rest is the bot's own rule."""
     text = arg.strip()
     path = Path(text).expanduser()
     if text and path.is_file():
-        return "file", str(path.resolve())
-    if _URL.match(text):
-        return "link", text
-    return "instruction", text
+        return "file", message_to_job(Incoming(USER_ID, "", path.resolve()))
+    job = message_to_job(Incoming(USER_ID, text))
+    return ("link" if job.url else "instruction"), job
 
 
 def plain(text: str) -> str:
@@ -50,12 +52,14 @@ def plain(text: str) -> str:
 
 
 class _Terminal:
-    """Prints replies and remembers the buttons that are waiting for an answer."""
+    """Prints replies and remembers each report's buttons until they are answered."""
 
     def __init__(self, out: TextIO, host: str, debug: bool):
         self.out, self.host, self.debug = out, host, debug
-        self.choices: list[tuple[str, str]] = []
+        self.pending: list[dict[int, str]] = []  # one {number: callback data} per report
+        self.counter = 0
         self.net_message = ""
+        self.failed = False
 
     def say(self, text: str) -> None:
         print(plain(text), file=self.out, flush=True)
@@ -66,8 +70,14 @@ class _Terminal:
             return
         self.say(reply.text)
         if reply.buttons:
-            self.choices = list(reply.buttons)
-            self.say("  ".join(f"{i}) {label}" for i, (label, _) in enumerate(reply.buttons, 1)))
+            numbered = {}
+            for label, data in reply.buttons:
+                self.counter += 1
+                numbered[self.counter] = data
+            title = plain(reply.text.strip().splitlines()[0])[:40] if reply.text.strip() else ""
+            labels = "  ".join(f"{n}) {label}" for n, (label, _) in zip(numbered, reply.buttons))
+            self.say(f"{labels}  ({title})" if title else labels)
+            self.pending.append(numbered)
 
     def guard(self, fn):
         """Wrap a dep: a network failure is explained in one sentence (traceback only on --debug)."""
@@ -75,6 +85,7 @@ class _Terminal:
             try:
                 return fn(*args, **kwargs)
             except Exception as e:  # noqa: BLE001
+                self.failed = True
                 if self.debug:
                     traceback.print_exc()
                 if is_network_error(e):
@@ -83,16 +94,27 @@ class _Terminal:
                 raise
         return wrapped
 
+    def guard_adapter(self, fn):
+        """Like guard, and an adapter that refuses or fails counts as a failed run."""
+        inner = self.guard(fn)
+
+        def wrapped(*args, **kwargs):
+            result = inner(*args, **kwargs)
+            if not getattr(result, "ok", True):
+                self.failed = True
+            return result
+        return wrapped
+
 
 def _guarded(deps: Deps, term: _Terminal) -> Deps:
     return replace(deps, load_video=term.guard(deps.load_video), fact_check=term.guard(deps.fact_check),
                    run_trial=term.guard(deps.run_trial), route=term.guard(deps.route),
-                   run_adapter=term.guard(deps.run_adapter))
+                   run_adapter=term.guard_adapter(deps.run_adapter))
 
 
-def _answer(pipeline: Pipeline, term: _Terminal, label_data: tuple[str, str]) -> None:
+def _answer(pipeline: Pipeline, term: _Terminal, data: str) -> None:
     """Route a chosen button exactly like the bot's button handler does."""
-    action, _, rest = label_data[1].partition(":")
+    action, _, rest = data.partition(":")
     reply = None
     if action in (ADOPT, SKIP):
         reply = pipeline.decide(USER_ID, rest, action)
@@ -106,14 +128,15 @@ def run_try(arg: str, *, deps: Deps | None = None, stdin: TextIO | None = None, 
     """Run one link, file or instruction through the pipeline. Returns an exit code."""
     out = stdout or sys.stdout
     stdin = stdin or sys.stdin
-    kind, value = classify(arg)
+    kind, job = classify(arg)
+    value = arg.strip()
     if not value:
         print(USAGE, file=out)
         return 1
     if kind == "instruction" and " " not in value and value.lower().endswith(_VIDEO_EXT):
         print(f"I can't find a file called {value}. Check the path, or paste a link.", file=out)
         return 1
-    host = re.sub(r"^https?://([^/:?#]+).*$", r"\1", value, flags=re.IGNORECASE) if kind == "link" else ""
+    host = (urlparse(job.url).hostname or "") if job.url else ""
     term = _Terminal(out, host, debug)
     if deps is None:
         try:
@@ -123,28 +146,23 @@ def run_try(arg: str, *, deps: Deps | None = None, stdin: TextIO | None = None, 
             print(f"There's a problem with your config file: {e}", file=out)
             return 1
     pipeline = Pipeline(_guarded(deps, term), term.send, UserQueue(inline=True))
-    if kind == "instruction":
-        job = Job(USER_ID, JobKind.INSTRUCTION, text=value)
-    elif kind == "link":
-        job = Job(USER_ID, JobKind.VIDEO, url=value)
-    else:
-        job = Job(USER_ID, JobKind.VIDEO, file=Path(value))
     waits = interactive if interactive is not None else stdin.isatty()
     waits = waits and not no_input
     pipeline.submit(job)
-    while term.choices:
-        choices, term.choices = term.choices, []
+    while term.pending:
         if not waits:
             term.say("(choices not answered: run without --no-input in a terminal to pick one)")
             break
-        print(f"Choose 1-{len(choices)} (Enter to stop): ", end="", file=out, flush=True)
+        print("Choose a number (Enter to stop): ", end="", file=out, flush=True)
         line = stdin.readline().strip()
-        if not line.isdigit() or not 1 <= int(line) <= len(choices):
+        group = next((g for g in term.pending if line.isdigit() and int(line) in g), None)
+        if group is None:
             if line:
                 term.say("That isn't one of the choices, so I stopped here.")
             break
-        _answer(pipeline, term, choices[int(line) - 1])
-    return 0
+        term.pending.remove(group)
+        _answer(pipeline, term, group[int(line)])
+    return 1 if term.failed else 0
 
 
 def main(argv: list[str]) -> int:
