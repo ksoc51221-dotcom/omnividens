@@ -67,6 +67,6 @@ def route(text: str, client: RouterClient | None = None) -> Instruction | Clarif
             from reelay.router.client import AnthropicRouterClient
             client = AnthropicRouterClient()
         data = client.complete(SYSTEM_PROMPT, f"<user_message>\n{text}\n</user_message>")
+        return _from_haiku(data, found)
     except Exception:  # no key, no network, refusal, bad JSON: never crash the bot handler
         return Clarification(RETRY_QUESTION)
-    return _from_haiku(data, found)

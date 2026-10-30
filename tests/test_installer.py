@@ -787,3 +787,19 @@ def test_wizard_token_step_explains_filter_instead_of_no_internet(home):
     assert Wizard(user.console(), deps).run() == 1
     assert user.screen.count("filtering Telegram") == 2  # at the token step and again at the end
     assert "no internet?" not in user.screen
+
+
+def test_corrupt_paired_json_gives_one_clear_line_in_doctor_and_wizard(home):
+    from reelay.core.config import ConfigError
+    from reelay.installer import doctor
+    paired = home / "dot-reelay" / "paired.json"
+    paired.parent.mkdir(parents=True, exist_ok=True)
+    paired.write_text("{broken")
+    check = doctor.pairing_check()
+    assert not check.ok and "unreadable" in check.detail
+
+    def boom():
+        raise ConfigError("paired.json is corrupt. Delete it and run `reelay setup`.")
+    user = FakeUser(["", TOKEN, "", "n", "y"])
+    Wizard(user.console(), make_deps(home, paired_count=boom)).run()
+    assert "paired.json is corrupt" in user.screen and "Traceback" not in user.screen

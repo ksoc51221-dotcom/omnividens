@@ -176,3 +176,38 @@ def test_start_with_bot_suffix_pairs(setup):
     bot, pairing, *_ = setup
     assert bot.handle_message(Incoming("1", f"/start@MyBot {pairing.new_code()}")) is not None
     assert bot.handle_message(Incoming("2", "/startfoo")) is None
+
+
+def test_channel_post_without_user_is_ignored(setup):
+    bot = paired(setup)
+    upd = fake_update("1", "hello there")
+    upd.effective_user = None
+    assert asyncio.run(handle_update(bot, upd)) is None and setup[2] == []
+
+
+def test_command_caption_video_is_never_downloaded(setup):
+    bot = paired(setup)
+    att = FakeAttachment()
+    asyncio.run(handle_update(bot, fake_update("1", "/vibe", video=att)))
+    assert att.downloads == []
+
+
+def test_edited_messages_do_not_match_the_handler(setup):
+    from telegram import Update
+    from telegram.ext import MessageHandler
+    from reelay.bot.telegram_layer import build_application
+    app = build_application(setup[0], token="123:abc")
+    handler = next(h for h in app.handlers[0] if isinstance(h, MessageHandler))
+    msg = {"message_id": 1, "date": 0, "chat": {"id": 1, "type": "private"},
+           "from": {"id": 1, "is_bot": False, "first_name": "a"}, "text": "https://x.com/a/status/1"}
+    new = Update.de_json({"update_id": 1, "message": msg}, None)
+    edited = Update.de_json({"update_id": 2, "edited_message": msg | {"edit_date": 1}}, None)
+    assert handler.check_update(new) and not handler.check_update(edited)
+
+
+def test_corrupt_paired_json_is_one_clear_error(tmp_path):
+    from reelay.core.config import ConfigError
+    p = tmp_path / "paired.json"
+    p.write_text("{not json")
+    with pytest.raises(ConfigError, match="corrupt"):
+        Pairing(p)
