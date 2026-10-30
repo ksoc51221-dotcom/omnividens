@@ -6,18 +6,18 @@ VTT parsing and the Groq call follow the claude-video approach (MIT), see NOTICE
 import json
 import os
 import re
-import subprocess
 import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
 
 from reelay.core.config import ConfigError, load_config
+from reelay.video.proc import run_tool
 
 GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_MODEL = "whisper-large-v3"
 
-_CUE = re.compile(r"(\d+):(\d{2}):(\d{2})[.,]\d{3}\s+-->")
+_CUE = re.compile(r"(?:(\d+):)?(\d{2}):(\d{2})[.,]\d{3}\s+-->")
 _TAG = re.compile(r"<[^>]+>")
 
 
@@ -43,7 +43,7 @@ def parse_vtt(text: str) -> str:
         m = _CUE.match(raw)
         if m:
             flush()
-            h, mi, s = (int(x) for x in m.groups())
+            h, mi, s = (int(x or 0) for x in m.groups())
             start = h * 3600 + mi * 60 + s
         elif raw.strip() and "-->" not in raw and not raw.startswith(("WEBVTT", "Kind:", "Language:")):
             cleaned = _TAG.sub("", raw).strip()
@@ -72,10 +72,10 @@ def load_groq_key() -> str | None:
 
 
 def has_audio(video: Path) -> bool:
-    out = subprocess.run(
+    out = run_tool(
         ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries",
          "stream=index", "-of", "csv=p=0", str(video)],
-        capture_output=True, text=True,
+        30, capture_output=True, text=True,
     ).stdout
     return bool(out.strip())
 
@@ -83,10 +83,10 @@ def has_audio(video: Path) -> bool:
 def whisper_transcribe(video: Path, work_dir: Path, api_key: str) -> str:
     """Extract small mono mp3, send to Groq Whisper, return '[m:ss] text' lines. '' on failure."""
     audio = work_dir / "audio.mp3"
-    subprocess.run(
+    run_tool(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-t", "600", "-i", str(video),
          "-vn", "-ac", "1", "-ar", "16000", "-b:a", "64k", str(audio)],
-        capture_output=True,
+        120, capture_output=True,
     )
     if not audio.exists():
         return ""

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from reelay.video import DownloadError, FrameError, NetworkError, TooLongError, load_video
+from reelay.video import VideoError, DownloadError, FrameError, NetworkError, TooLongError, load_video
 from reelay.video import download as dl
 from reelay.video import pipeline
 from reelay.video.frames import plan_times
@@ -267,3 +267,24 @@ def test_network_hints_only_from_error_lines_and_host_sanitised(tmp_path, monkey
         dl.download("https://a.com/x", tmp_path)
     assert not isinstance(err.value, NetworkError)
     assert dl.safe_host("https://" + "a" * 80 + ".com/") == ("a" * 60)
+
+
+def test_hourless_vtt_cues_keep_their_times():
+    vtt = "WEBVTT\n\n00:01.000 --> 00:02.000\nfirst\n\n01:05.000 --> 01:06.000\nsecond\n"
+    assert parse_vtt(vtt) == "[0:01] first\n[1:05] second"
+
+
+def test_hung_ffmpeg_becomes_clean_video_error(tmp_path, monkeypatch):
+    from reelay.video import ToolTimeoutError, frames, proc, transcript
+    def hang(cmd, **kw):
+        raise proc.subprocess.TimeoutExpired(cmd, kw["timeout"])
+    monkeypatch.setattr(proc.subprocess, "run", hang)
+    monkeypatch.setattr(frames.shutil, "which", lambda n: "/usr/bin/" + n)
+    with pytest.raises(ToolTimeoutError) as err:
+        frames.probe_duration(tmp_path / "x.mp4")
+    assert "too long" in err.value.user_message
+    with pytest.raises(ToolTimeoutError):
+        frames.extract_frames(tmp_path / "x.mp4", tmp_path / "f")
+    with pytest.raises(ToolTimeoutError):
+        transcript.has_audio(tmp_path / "x.mp4")
+    assert isinstance(err.value, VideoError)

@@ -41,3 +41,9 @@ class TooLongError(DownloadError):
         "That video is too long or too big for me (max 10 minutes). "
         "Send a shorter clip or a screen recording of the key part."
     )
+
+
+class ToolTimeoutError(VideoError):
+    """ffmpeg/ffprobe took too long (hung or a huge file)."""
+
+    user_message = "Processing that video took too long. Try a shorter clip."
