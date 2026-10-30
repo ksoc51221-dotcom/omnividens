@@ -288,3 +288,13 @@ def test_hung_ffmpeg_becomes_clean_video_error(tmp_path, monkeypatch):
     with pytest.raises(ToolTimeoutError):
         transcript.has_audio(tmp_path / "x.mp4")
     assert isinstance(err.value, VideoError)
+
+
+@pytest.mark.parametrize("url", [
+    "http://[::ffff:127.0.0.1]/v", "http://[fd00::1]/v", "http://[fe80::1]/v",
+    "http://[::ffff:10.0.0.1]/v", "http://[::1]/v", "http://[::]/v", "http://0.0.0.0/v",
+])
+def test_ipv6_private_forms_rejected(url, tmp_path):
+    assert dl.is_private_host(url)
+    with pytest.raises(DownloadError, match="local or private"):
+        dl.download(url, tmp_path)

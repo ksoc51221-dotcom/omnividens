@@ -44,7 +44,7 @@ def is_url(source: str) -> bool:
 
 def is_private_host(url: str) -> bool:
     """True for localhost, private/loopback/link-local IPs, or names that resolve to them."""
-    host = safe_host(url)
+    host = (urlparse(url).hostname or "").lower()  # raw host: safe_host() would mangle IPv6
     if host == "localhost" or host.endswith(".localhost"):
         return True
     try:
@@ -54,7 +54,9 @@ def is_private_host(url: str) -> bool:
             addrs = [ipaddress.ip_address(info[4][0]) for info in socket.getaddrinfo(host, None)]
         except (socket.gaierror, ValueError):
             return False  # unknown name: yt-dlp will fail on its own
-    return any(a.is_private or a.is_loopback or a.is_link_local or a.is_reserved for a in addrs)
+    addrs = [getattr(a, "ipv4_mapped", None) or a for a in addrs]  # ::ffff:10.0.0.1 -> 10.0.0.1
+    return any(a.is_private or a.is_loopback or a.is_link_local or a.is_reserved
+               or a.is_multicast or a.is_unspecified for a in addrs)
 
 
 def safe_host(url: str) -> str:
@@ -77,7 +79,10 @@ def _run_group(cmd: list[str], timeout_s: int) -> subprocess.CompletedProcess:
     try:
         out, err = proc.communicate(timeout=timeout_s)
     except subprocess.TimeoutExpired:
-        os.killpg(proc.pid, signal.SIGKILL)
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:  # already gone
+            pass
         proc.communicate()
         raise
     return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
