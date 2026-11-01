@@ -531,3 +531,93 @@ def test_unclear_is_written_under_the_lock(world):
     world.route_result = Clarification("Which file?")
     world.say("1", "fix it")
     assert pl._unclear["1"] == "fix it"
+
+
+# ---------------------------------------------------------------- T19 error handler
+
+class _Ctx:
+    def __init__(self, error):
+        self.error = error
+
+
+def _run_handler(handler, error):
+    import asyncio
+
+    asyncio.run(handler(None, _Ctx(error)))
+
+
+def test_error_handler_prints_one_friendly_line_per_minute():
+    pytest.importorskip("telegram")
+    from telegram.error import NetworkError
+
+    from reelay.__main__ import CERT_HELP, make_error_handler
+
+    lines, now = [], [1000.0]
+    handler = make_error_handler(clock=lambda: now[0], out=lines.append)
+    err = NetworkError("httpx.ConnectError: [SSL: CERTIFICATE_VERIFY_FAILED] https://api.telegram.org/bot123456:SECRETSECRETSECRETSECRET/getUpdates")
+    for _ in range(5):
+        _run_handler(handler, err)
+    assert len(lines) == 1
+    assert lines[0].startswith(CERT_HELP) and "Retrying" in lines[0]
+    assert "SECRET" not in lines[0] and "Traceback" not in lines[0]
+    low = lines[0].lower()
+    assert "vpn" not in low and "disable" not in low
+    now[0] += 61
+    _run_handler(handler, err)
+    assert len(lines) == 2
+
+
+def test_error_handler_other_errors_one_line_no_text():
+    pytest.importorskip("telegram")
+    from reelay.__main__ import make_error_handler
+
+    lines = []
+    handler = make_error_handler(clock=lambda: 0.0, out=lines.append)
+    _run_handler(handler, ValueError("secret 123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ"))
+    assert len(lines) == 1 and "--debug" in lines[0] and "ABCDEF" not in lines[0]
+
+
+def test_error_handler_debug_shows_traceback_without_token():
+    pytest.importorskip("telegram")
+    from reelay.__main__ import make_error_handler
+
+    lines = []
+    handler = make_error_handler(debug=True, clock=lambda: 0.0, out=lines.append)
+    try:
+        raise ValueError("bad url /bot123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ/getMe")
+    except ValueError as e:
+        err = e
+    _run_handler(handler, err)
+    _run_handler(handler, err)  # debug is not rate limited
+    assert len(lines) == 2
+    assert "Traceback" in lines[0] and "ValueError" in lines[0]
+    assert "ABCDEFGHIJ" not in lines[0]
+
+
+def test_main_registers_error_handler(monkeypatch):
+    pytest.importorskip("telegram")
+    import reelay.__main__ as m
+
+    registered = []
+
+    class App:
+        post_init = None
+
+        def add_error_handler(self, h):
+            registered.append(h)
+
+    class Q:
+        def shutdown(self, wait):
+            pass
+
+    class Bot:
+        pipeline = type("P", (), {"queue": Q()})()
+
+    monkeypatch.setattr("reelay.bot.config.get_bot_token", lambda: "t")
+    monkeypatch.setattr("reelay.bot.telegram_layer.build_application", lambda bot, token: App())
+    monkeypatch.setattr("reelay.core.pipeline.PipelineBot", lambda *a: Bot())
+    monkeypatch.setattr(m, "default_deps", lambda: None)
+    monkeypatch.setattr(m, "serve", lambda app: 0)
+    monkeypatch.setattr("reelay.bot.Pairing", lambda: type("P", (), {"paired_users": lambda s: ["1"], "new_code": lambda s: "x"})())
+    assert m.main([]) == 0
+    assert len(registered) == 1

@@ -2,8 +2,11 @@
 
 import asyncio
 import logging
+import re
 import ssl
 import sys
+import time
+import traceback
 
 from reelay.core.config import ConfigError, load_config
 
@@ -80,6 +83,41 @@ def explain_network_error(error: BaseException) -> str:
     return NET_HELP
 
 
+RETRY_NOTE = " Retrying…"
+ERROR_LINE_EVERY = 60.0  # seconds between friendly error lines
+_TOKEN_RE = re.compile(r"\d{6,}:[A-Za-z0-9_-]{20,}")
+
+
+def scrub_token(text: str) -> str:
+    """Hide anything shaped like a bot token (digits:secret) before it reaches the terminal."""
+    return _TOKEN_RE.sub("<token>", text)
+
+
+def make_error_handler(debug: bool = False, clock=time.monotonic, out=print):
+    """An Application error handler: one friendly line at most every ~60 s instead of a traceback
+    on every polling retry. The full traceback (token scrubbed) shows only with --debug."""
+    last = [None]
+
+    async def on_error(update, context) -> None:
+        error = context.error
+        if debug:
+            text = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+            out(scrub_token(text))
+            return
+        now = clock()
+        if last[0] is not None and now - last[0] < ERROR_LINE_EVERY:
+            return
+        last[0] = now
+        from telegram.error import NetworkError
+
+        if isinstance(error, NetworkError):
+            out(explain_network_error(error) + RETRY_NOTE)
+        else:
+            out(f"Something went wrong ({type(error).__name__}). Run with --debug for details.")
+
+    return on_error
+
+
 def serve(app) -> int:
     """Run the bot's polling loop; a network failure becomes one message and exit code 1."""
     from telegram.error import Conflict, InvalidToken, NetworkError  # TimedOut is a NetworkError too
@@ -120,6 +158,7 @@ def main(argv: list[str] | None = None) -> int:
         print(e)  # friendly message, no traceback
         return 1
     app.post_init = sender.attach
+    app.add_error_handler(make_error_handler(debug="--debug" in argv))
     if "--pair" in argv or not pairing.paired_users():
         print(f"Open your bot in Telegram and send:  /start {pairing.new_code()}  (valid 15 minutes)")
     print("Reelay is running. Press Ctrl+C to stop.")
