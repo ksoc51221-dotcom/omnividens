@@ -79,6 +79,7 @@ class TrialReport:
     seconds: float
     fit: str  # why it does or doesn't suit this user's projects
     logs: str = ""
+    local_ran: bool = False  # a local-model attempt ran (even if it then escalated to Claude)
 
 
 @dataclass

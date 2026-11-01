@@ -4,6 +4,7 @@ The terminal is only another `send` callback plus a way to answer buttons; the r
 is `reelay.core.pipeline.Pipeline`. Video content stays data: it is printed, never obeyed.
 """
 
+import functools
 import logging
 import re
 import sys
@@ -83,6 +84,7 @@ class _Terminal:
 
     def guard(self, fn):
         """Wrap a dep: a network failure is explained in one sentence (traceback only on --debug)."""
+        @functools.wraps(fn)  # keep the real signature: the pipeline checks it for allow_local
         def wrapped(*args, **kwargs):
             try:
                 return fn(*args, **kwargs)
