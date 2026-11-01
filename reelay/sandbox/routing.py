@@ -61,15 +61,18 @@ def choose_backend(
     claude_used_today: int,
     cap: int = DEFAULT_MAX_CLAUDE_TRIALS_PER_DAY,
     configured: str = "auto",
+    local_blocked: str = "",
 ) -> tuple[str, str]:
     """Pick (backend, reason). backend is "subscription", "api", "local" or "none" (scan-only).
 
     `available` maps backend name -> usable now. Claude backends are skipped once
-    `claude_used_today` reaches `cap`.
+    `claude_used_today` reaches `cap`. A non-empty `local_blocked` (a reason) means local must not
+    be used even if it works, e.g. this video already had its one local trial.
     """
     under_cap = claude_used_today < cap
     claude = next((b for b in CLAUDE_BACKENDS if available.get(b)), None)
-    local = available.get("local", False)
+    local = available.get("local", False) and not local_blocked
+    no_local = local_blocked or "Ollama is not usable"
     capped = f"daily Claude cap of {cap} reached"
 
     if configured in ("subscription", "api"):  # the owner picked one: no silent switching
@@ -79,17 +82,17 @@ def choose_backend(
             return "none", f"{capped}; trial_backend is {configured}"
         return configured, f"trial_backend is {configured}"
     if configured == "local":
-        return ("local", "trial_backend is local") if local else ("none", "trial_backend is local but Ollama is not usable")
+        return ("local", "trial_backend is local") if local else ("none", f"trial_backend is local but {no_local}")
 
     light, why = classify(repo)
     if light:
         if local:
             return "local", f"light skill ({why}); local keeps it on this Mac and free"
         if claude and under_cap:
-            return claude, f"light skill ({why}) but Ollama is not usable; using Claude"
+            return claude, f"light skill ({why}) but {no_local}; using Claude"
         if claude:
-            return "none", f"light skill but Ollama is not usable and {capped}"
-        return "none", "light skill but neither Ollama nor Claude is set up"
+            return "none", f"light skill but {no_local} and {capped}"
+        return "none", f"light skill but {no_local} and no Claude backend is set up"
     if claude and under_cap:
         return claude, f"heavy skill ({why}); using Claude"
     if local:

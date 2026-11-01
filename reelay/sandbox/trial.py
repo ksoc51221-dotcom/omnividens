@@ -1,5 +1,6 @@
 """Orchestrates one trial: fetch -> scan -> (maybe) run -> measure -> clean up."""
 
+import logging
 import shutil
 import tempfile
 import time
@@ -11,6 +12,8 @@ from reelay.core.types import Candidate, TrialReport
 from reelay.sandbox import fetch, routing, runner as runner_mod, safety, scan
 from reelay.sandbox.runner import RunResult, Runner
 
+log = logging.getLogger(__name__)
+LOCAL_HEADS_UP = "🖥️ Testing this on your Mac with a small local model. It can take ~5–10 min."
 SCAN_ONLY_FIT = "Scan-only: safety scan done, live trial skipped"
 NO_BACKEND_HINT = " — set up Ollama (free) or a Pro token (`claude setup-token`) to try it for real."
 
@@ -25,13 +28,17 @@ def run_trial(
     keep: bool = False,
     probe=None,
     launch=None,
+    allow_local: bool = True,
+    notify: Callable[[str], None] | None = None,
 ) -> TrialReport:
     """Trial `candidate` and return a report. Never raises for bad candidates.
 
     A custom `runner` runs once, as given. Without one, the backend is chosen by `routing`
     (`probe` -> which backends work now, `launch` -> run one backend; tests pass fakes).
+    `allow_local=False` keeps this trial off the local model (the pipeline allows one per video).
+    `notify` gets a one-line heads-up before a slow local run.
     """
-    routed = None if runner else Routed(probe or default_probe, launch or runner_mod.run_backend)
+    routed = None if runner else Routed(probe or default_probe, launch or runner_mod.run_backend, allow_local, notify)
     # mkdtemp makes a private (0700) folder in the system temp dir, away from ~/.reelay.
     run_dir = Path(tempfile.mkdtemp(prefix="reelay-sandbox-", dir=root))
     repo = run_dir / "repo"
@@ -77,6 +84,8 @@ def _trial(candidate, runner, fetcher, scanner, timeout_s, run_dir, repo, routed
 class Routed:
     probe: Callable[[], dict[str, bool]]
     launch: Callable[..., RunResult]
+    allow_local: bool = True
+    notify: Callable[[str], None] | None = None
 
 
 def default_probe() -> dict[str, bool]:
@@ -89,6 +98,10 @@ def default_probe() -> dict[str, bool]:
     }
 
 
+def _secrets() -> list[str]:
+    return [k for k in (runner_mod.find_api_key(), runner_mod.find_oauth_token()) if k]
+
+
 def _attempt(routed: Routed, backend: str, repo, run_dir, timeout_s) -> RunResult:
     """One run on one backend. Claude-backed runs are counted against today's cap first."""
     if backend in routing.CLAUDE_BACKENDS:
@@ -97,10 +110,15 @@ def _attempt(routed: Routed, backend: str, repo, run_dir, timeout_s) -> RunResul
     budget = runner_mod.max_trial_usd() if backend == "api" else None
     if backend == "local":
         timeout_s = max(timeout_s, routing.LOCAL_MIN_TIMEOUT_S)  # small models on a laptop are slow
+        if routed.notify:
+            try:
+                routed.notify(LOCAL_HEADS_UP)
+            except Exception:  # noqa: BLE001 - a failed chat message must not stop the trial
+                log.exception("heads-up failed")
     try:
         res = routed.launch(backend, repo, run_dir, timeout_s, model, budget)
     except Exception as e:  # a broken backend must not crash the pipeline
-        return RunResult(False, 0.0, 0, f"The trial run crashed: {e!r}", backend, model)
+        return RunResult(False, 0.0, 0, runner_mod.redact(f"The trial run crashed: {e!r}", _secrets()), backend, model)
     res.backend, res.model = res.backend or backend, res.model or model
     return res
 
@@ -110,7 +128,8 @@ def _routed_run(routed: Routed, repo, run_dir, timeout_s, verdict, note, report,
     available = routed.probe()
     cap = runner_mod.max_claude_trials_per_day()
     used = routing.claude_used_today()
-    backend, reason = routing.choose_backend(repo, available, used, cap, configured)
+    blocked = "" if routed.allow_local else "this video already had its one local trial"
+    backend, reason = routing.choose_backend(repo, available, used, cap, configured, blocked)
     if backend == "none":
         hint = NO_BACKEND_HINT if not any(available.values()) else "."
         return report(verdict, True, False, 0, 0.0, f"{SCAN_ONLY_FIT} ({reason}){hint}", note)

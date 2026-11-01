@@ -5,7 +5,7 @@ import subprocess
 
 import pytest
 
-from reelay.core.types import Candidate
+from reelay.core.types import Candidate, TrialReport
 from reelay.sandbox import fetch, scan, run_trial
 from reelay.sandbox.runner import RunResult, parse_cli_json
 
@@ -629,3 +629,99 @@ def test_local_gets_a_longer_timeout_claude_keeps_the_callers(tmp_path):
     trial(tmp_path, light_repo, ALL, local)
     trial(tmp_path, heavy_repo, ALL, claude)
     assert local.timeouts == [routing.LOCAL_MIN_TIMEOUT_S] and claude.timeouts == [180]
+
+
+# ---------------------------------------------------------------- T15 review fixes
+@pytest.mark.parametrize("inside_cut", [3, 10, 15])
+def test_secret_straddling_the_500_char_cut_is_redacted(monkeypatch, tmp_path, inside_cut):
+    # the last 500 chars of the raw text start `inside_cut` characters into the token
+    noisy = "x" * 40 + SECRET + "y" * (500 - len(SECRET) + inside_cut)
+    assert noisy[-500:].startswith(SECRET[inside_cut:]) and SECRET not in noisy[-500:]
+    res, _, _ = run_with_fake_popen(monkeypatch, tmp_path, "subscription", noisy,
+                                    config=f'claude_oauth_token = "{SECRET}"\n')
+    assert SECRET[inside_cut:] not in res.output and "[redacted]" in res.output
+
+
+def test_crash_text_is_redacted(tmp_path):
+    (Path(__import__("os").environ["REELAY_HOME"]) / "config.toml").write_text(f'claude_oauth_token = "{SECRET}"\n')
+
+    def boom(*a):
+        raise RuntimeError(f"failed with {SECRET}")
+    r = trial(tmp_path, heavy_repo, ALL, boom)
+    assert SECRET not in r.logs and SECRET not in r.fit and "[redacted]" in r.logs
+
+
+def test_allow_local_false_sends_light_to_claude_else_scan_only(tmp_path):
+    launcher = Launcher()
+    run = lambda avail, builder=light_repo: run_trial(
+        CAND, None, make_fetch(builder), scanner_returning("clean"), root=tmp_path,
+        probe=lambda: avail, launch=launcher, allow_local=False)
+    assert run(ALL).ran and launcher.calls[-1][0] == "subscription"
+    r = run({**NONE, "local": True})
+    assert not r.ran and r.fit.startswith("Scan-only") and "already had its one local trial" in r.fit
+    assert len(launcher.calls) == 1
+    run({**NONE, "local": True}, heavy_repo)  # heavy + no Claude + local blocked: same
+    assert len(launcher.calls) == 1
+
+
+def test_heads_up_before_local_run_only(tmp_path):
+    said = []
+    kw = dict(root=tmp_path, probe=lambda: ALL, notify=said.append)
+    run_trial(CAND, None, make_fetch(heavy_repo), scanner_returning("clean"), launch=Launcher(), **kw)
+    assert said == []  # Claude run: no heads-up
+    seen_before_launch = []
+
+    def launch(*a):
+        seen_before_launch.append(list(said))
+        return RunResult(True, 1, 1, "ok", "local", "qwen3:8b")
+    run_trial(CAND, None, make_fetch(light_repo), scanner_returning("clean"), launch=launch, **kw)
+    assert len(said) == 1 and "~5–10 min" in said[0] and seen_before_launch == [said[:1]]
+
+    def bad_notify(text):
+        raise RuntimeError("telegram down")
+    r = run_trial(CAND, None, make_fetch(light_repo), scanner_returning("clean"), launch=Launcher(),
+                  root=tmp_path, probe=lambda: ALL, notify=bad_notify)
+    assert r.ran  # a failed heads-up never stops the trial
+
+
+def test_pipeline_runs_at_most_one_local_trial_per_video(tmp_path):
+    import threading
+    from types import SimpleNamespace
+
+    from reelay.core import pipeline
+    from reelay.core.types import Profile, Verdict
+
+    seen, sent = [], []
+
+    def real_like(candidate, allow_local=True, notify=None):
+        seen.append(allow_local)
+        local = allow_local
+        fit = ("Ran in isolation on local (qwen3:8b) — light" if local else "Ran in isolation on subscription (m) — x")
+        return TrialReport(candidate, True, True, "clean", 1, 1.0, fit)
+
+    stub = SimpleNamespace(deps=SimpleNamespace(run_trial=real_like), send=lambda *a: sent.append(a),
+                           _say=lambda uid, text, profile: sent.append(text), _lock=threading.Lock(),
+                           _reports=SimpleNamespace(put=lambda *a: None))
+    stub._run_trial = lambda *a, **k: pipeline.Pipeline._run_trial(stub, *a, **k)
+    cands = [Candidate(f"c{i}", "skill", f"https://github.com/o/r{i}") for i in range(3)]
+    pipeline.Pipeline._trials(stub, "u", Verdict("s", [], cands), Profile(user_id="u"))
+    assert seen == [True, False, False]
+    assert pipeline.LOCAL_TRIAL_MARK in real_like(cands[0]).fit
+
+    plain = []  # a run_trial without the new parameters is still called the old way
+    stub.deps.run_trial = lambda c: plain.append(c.name) or TrialReport(c, True, False, "clean", 0, 0.0, "x")
+    pipeline.Pipeline._trials(stub, "u", Verdict("s", [], cands[:1]), Profile(user_id="u"))
+    assert plain == ["c0"]
+
+
+def test_real_local_report_text_carries_the_pipeline_mark(tmp_path):
+    from reelay.core.pipeline import LOCAL_TRIAL_MARK
+    ok = trial(tmp_path, light_repo, ALL, Launcher())
+    bad = trial(tmp_path, light_repo, {**ALL, "subscription": False, "api": False}, Launcher(ok={"local": False}))
+    claude = trial(tmp_path, heavy_repo, ALL, Launcher())
+    assert LOCAL_TRIAL_MARK in ok.fit and LOCAL_TRIAL_MARK in bad.fit and LOCAL_TRIAL_MARK not in claude.fit
+
+
+def test_local_prompt_is_a_parameter():
+    argv = runner.build_argv("claude", {}, "m", "local", prompt="hello")
+    assert argv[argv.index("-p") + 1] == "hello"

@@ -176,12 +176,12 @@ def ollama_status(model: str, opener=urllib.request.urlopen) -> tuple[bool, str]
 
 
 def build_argv(claude: str, settings: dict, model: str = DEFAULT_TRIAL_MODEL,
-               backend: str = "api", budget_usd: float | None = None) -> list[str]:
+               backend: str = "api", budget_usd: float | None = None, prompt: str = TRIAL_PROMPT) -> list[str]:
     """`--bare` only for the api backend: it reads auth strictly from ANTHROPIC_API_KEY, so it
     would reject the subscription token and the local endpoint. The other backends keep every
     other lock (own HOME/config dir, disableAllHooks, scoped tools, deny dirs, static scan)."""
     argv = [claude] + (["--bare"] if backend == "api" else []) + [
-        "-p", TRIAL_PROMPT, "--output-format", "json",
+        "-p", prompt, "--output-format", "json",
         "--tools", TOOLS, "--settings", json.dumps(settings),
         "--strict-mcp-config", "--no-session-persistence", "--model", model,
     ]
@@ -240,7 +240,7 @@ def run_backend(backend: str, repo_dir: Path, run_dir: Path, timeout_s: int,
     try:
         ok, tokens, text = parse_cli_json(stdout)
     except (json.JSONDecodeError, AttributeError, ValueError):
-        return RunResult(False, seconds, 0, redact((stderr or stdout)[-500:], secrets), backend, model)
+        return RunResult(False, seconds, 0, redact(stderr or stdout, secrets)[-500:], backend, model)  # redact first: a token must not straddle the cut
     cost = parse_cost(stdout) if backend == "api" else None
     return RunResult(ok and proc.returncode == 0, seconds, tokens, redact(text, secrets), backend, model, cost)
 

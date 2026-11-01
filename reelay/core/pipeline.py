@@ -18,6 +18,7 @@ Safety rules this file keeps (from the module reviews):
 - Log level for httpx stays at WARNING (set in `__main__`) so the bot token never leaks.
 """
 
+import inspect
 import json
 import logging
 import re
@@ -43,6 +44,7 @@ log = logging.getLogger(__name__)
 
 Send = Callable[[str, Reply], None]  # thread-safe: may be called from any thread
 RUN, CANCEL = "run", "cancel"
+LOCAL_TRIAL_MARK = " on local ("  # the sandbox's report text says which backend ran
 MAX_TRIALS = 3  # candidates tried per video (each one costs time and maybe money)
 MAX_QUEUED = 5  # jobs waiting per user
 MAX_REMEMBERED = 200  # reports / confirmations kept in memory
@@ -356,10 +358,12 @@ class Pipeline:
             return
         if len(verdict.candidates) > MAX_TRIALS:
             self.send(uid, f"I found {len(verdict.candidates)} things; testing the first {MAX_TRIALS}.")
+        local_used = False  # at most one local-model trial per video: they are slow
         for i, candidate in enumerate(candidates, 1):
             self._say(uid, f"🧪 Testing in the sandbox ({i}/{len(candidates)}): {one_line(candidate.name, 60)}…", profile)
             try:
-                report = self.deps.run_trial(candidate)
+                report = self._run_trial(uid, candidate, profile, allow_local=not local_used)
+                local_used = local_used or LOCAL_TRIAL_MARK in report.fit
             except Exception:  # noqa: BLE001 - sandbox contract says never, but be safe
                 log.exception("trial crashed")
                 self.send(uid, f"The sandbox crashed while testing {one_line(candidate.name, 60)}. "
@@ -370,6 +374,14 @@ class Pipeline:
                 self._reports.put(report_id, [uid, report.candidate, report.scan_verdict, False])
             reply = report_reply(report_id, _cap(format_trial(report, profile)))
             self.send(uid, reply.text, reply.buttons)
+
+    def _run_trial(self, uid: str, candidate: Candidate, profile: Profile, allow_local: bool) -> TrialReport:
+        """Call the sandbox; the extra arguments are passed only if it accepts them (fakes may not)."""
+        params = inspect.signature(self.deps.run_trial).parameters
+        if "allow_local" not in params:
+            return self.deps.run_trial(candidate)
+        return self.deps.run_trial(candidate, allow_local=allow_local,
+                                   notify=lambda text: self._say(uid, text, profile))
 
     def _instruction(self, job: Job) -> None:
         """Typed text -> router -> a clarifying question, or a one-tap confirm."""
