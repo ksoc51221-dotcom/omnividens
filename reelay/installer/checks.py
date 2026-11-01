@@ -1,4 +1,4 @@
-"""Is everything Reelay needs on this Mac? Each check says what to do if not."""
+"""Is everything Omnividens needs on this Mac? Each check says what to do if not."""
 
 import shutil
 from dataclasses import dataclass
@@ -19,7 +19,7 @@ class Check:
 
 
 def tool_checks(which: Which = shutil.which) -> list[Check]:
-    """ffmpeg, yt-dlp and Claude Code: the three programs outside Reelay itself."""
+    """ffmpeg, yt-dlp and Claude Code: the three programs outside Omnividens itself."""
     has_brew = which("brew") is not None
     brew_fix = ("brew install ffmpeg" if has_brew else
                 "Install Homebrew from https://brew.sh (it asks for your Mac password once), "

@@ -6,13 +6,13 @@ from . import service
 from .doctor import run_doctor
 from .ui import Console
 
-HELP = """Reelay: share a video to your Telegram bot; your AI watches and fact-checks it.
+HELP = """Omnividens: share a video to your Telegram bot; your AI watches and fact-checks it.
 
   reelay setup            first-time setup wizard (about 5 minutes)
   reelay doctor           check that everything is in place
   reelay try <link|file|"text">  run one video or instruction here, no Telegram
   reelay pair             show a new pairing code and QR code for another phone
-  reelay service install  start Reelay automatically when you log in
+  reelay service install  start Omnividens automatically when you log in
   reelay service remove   stop that and delete it
   reelay                  run the bot now (same as: reelay run)
 """
@@ -44,11 +44,11 @@ def _pair(io: Console) -> int:
 def _service(io: Console, action: str) -> int:
     if action == "install":
         problem = service.install()
-        io.say(problem or "Reelay will now start whenever you log in. Remove it with:  reelay service remove")
+        io.say(problem or "Omnividens will now start whenever you log in. Remove it with:  reelay service remove")
         return 1 if problem else 0
     if action == "remove":
         problem = service.remove()
-        io.say(problem or "Removed. Reelay no longer starts at login.")
+        io.say(problem or "Removed. Omnividens no longer starts at login.")
         return 1 if problem else 0
     io.say("Usage:  reelay service install | remove")
     return 1

@@ -1,4 +1,4 @@
-# Reelay
+# Omnividens (`reelay` command)
 
 **Share any short video to your own Telegram bot. Your AI watches it, fact-checks it against who you are, and tries what's in it in a sandbox before you adopt anything.**
 
@@ -14,7 +14,7 @@ Built for the November 2026 hackathon. Status: **9 modules merged (8 core + inst
 - 🧪 **Trials** any tool or skill it finds: static scan first, then (with an API key) a measured run in an isolated folder. You get time, tokens and a verdict, and **Adopt / Skip** buttons. Adopt never installs anything for you.
 - 🗣️ **Takes instructions** ("summarise the README, use opus"): a cheap Haiku router checks they're clear, you confirm, and your own Claude Code runs them inside an allow-listed project folder.
 
-Every reply ends with a 🧾 **trust receipt**: what Reelay saw, checked, ran, and refused.
+Every reply ends with a 🧾 **trust receipt**: what Omnividens saw, checked, ran, and refused.
 
 ## Quickstart
 
@@ -24,7 +24,7 @@ reelay setup                                                        # checks too
 # then scan the QR (or send your bot:  /start <code>)
 ```
 
-`install.sh` installs `uv` if missing, then Reelay and yt-dlp, then runs `reelay setup`. Other commands: `reelay doctor` (what's OK / what to fix), `reelay pair`, `reelay service install|remove` (optional start at login), `reelay run`. **The real `curl | sh` has not been run yet** (no repo to fetch from); the pieces were tested and `uv tool install` was run for real in a scratch copy. From a checkout today: `pip install -e '.[dev]'` then `reelay setup`.
+`install.sh` installs `uv` if missing, then Omnividens and yt-dlp, then runs `reelay setup`. Other commands: `reelay doctor` (what's OK / what to fix), `reelay pair`, `reelay service install|remove` (optional start at login), `reelay run`. **The real `curl | sh` has not been run yet** (no repo to fetch from); the pieces were tested and `uv tool install` was run for real in a scratch copy. From a checkout today: `pip install -e '.[dev]'` then `reelay setup`.
 
 ## How it fits together
 
@@ -64,7 +64,7 @@ Modules only talk through the shared types in `reelay/core/types.py`. Video text
 
 - **Video is data, never instructions.** Captions, transcripts and on-screen text go into a delimited data block for fact-checking; nothing from a video can become a router message, adapter task or command.
 - **Only you can talk to your bot.** One-time 15-minute pairing code; strangers get no reply and cause no download.
-- **You tap before anything happens.** Reelay never installs. Adopt records your choice and prints a `git clone` line only for a plain `github.com/owner/repo` URL; you run it yourself.
+- **You tap before anything happens.** Omnividens never installs. Adopt records your choice and prints a `git clone` line only for a plain `github.com/owner/repo` URL; you run it yourself.
 - **Each AI call is locked down** to the fewest tools, in a throwaway folder, with a time limit and process-group kill.
 - **Local-first.** Config, profile and decisions live in `~/.reelay/` (0700/0600). Claude (and Groq, if you enable Whisper) see only what a given step needs.
 
@@ -89,7 +89,7 @@ Examples of what review caught: the bot **downloaded files from strangers before
 ## Limitations
 
 - **The sandbox is folder isolation, not a VM or container.** Same OS user, a fresh HOME, scoped tools and permission rules. A bug in Claude Code's permission system would not be contained. Docker is on the roadmap.
-- **Live trials need an Anthropic API key.** Verified live: with the isolated HOME a Pro/OAuth login is not carried over (`Not logged in`). Without a key Reelay does a **scan-only** report and says so.
+- **Live trials need an Anthropic API key.** Verified live: with the isolated HOME a Pro/OAuth login is not carried over (`Not logged in`). Without a key Omnividens does a **scan-only** report and says so.
 - **Not yet verified live** (reviewers had no key / a working login): the trial's `Read(//…)` permission rules and `--bare` hook-blocking (a canary-file test is still owed), the real `claude -p` JSON shape, the Haiku router against the live API, the API fact-check backend's search tool name, and Telegram end-to-end. All 283 tests use fakes. For the installer, a real BotFather token, QR scan, `launchctl` and login/restart are also untested. The owner's manual checklist is at the end of [T8.md](docs/reviews/T8.md).
 - Fact-check results are *sources cited by the model*, not proof. DNS rebinding / redirects to private hosts aren't fully covered.
 - Whisper (Groq) is opt-in and sends the audio to Groq. English subtitles only. Instagram carousels/images fail with a "send a screen recording" message.

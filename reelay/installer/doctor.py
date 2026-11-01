@@ -33,13 +33,13 @@ def config_checks(path: Path | None = None) -> list[Check]:
     projects = config.get("allowed_projects") or []
     missing = [p for p in projects if not Path(str(p)).expanduser().is_dir()]
     if not projects:
-        checks.append(Check("Project folders Reelay may work in", False, "none chosen",
-                            "reelay setup (without folders Reelay can only watch and fact-check)", required=False))
+        checks.append(Check("Project folders Omnividens may work in", False, "none chosen",
+                            "reelay setup (without folders Omnividens can only watch and fact-check)", required=False))
     elif missing:
-        checks.append(Check("Project folders Reelay may work in", False, f"{len(missing)} no longer exist: "
+        checks.append(Check("Project folders Omnividens may work in", False, f"{len(missing)} no longer exist: "
                             + ", ".join(map(str, missing)), "reelay setup", required=False))
     else:
-        checks.append(Check("Project folders Reelay may work in", True, f"{len(projects)} chosen"))
+        checks.append(Check("Project folders Omnividens may work in", True, f"{len(projects)} chosen"))
     has_key = bool(config.get("anthropic_api_key"))
     checks.append(Check("Anthropic API key (optional, costs money)", has_key,
                         "saved: sandbox trials can run" if has_key else "not set: trials are scan-only",
@@ -79,7 +79,7 @@ def run_doctor(io: Console, which: Which = shutil.which, path: Path | None = Non
         io.say("Checking your connection to Telegram...")  # can take a few seconds
         extra = [pairing_check(), service_check(), check_telegram()]
     checks += extra
-    io.say("Reelay doctor")
+    io.say("Omnividens doctor")
     io.say("=============")
     for c in checks:
         mark = "OK  " if c.ok else ("FIX " if c.required else "TIP ")

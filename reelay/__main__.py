@@ -68,7 +68,7 @@ CERT_HELP = ("Can't reach Telegram securely: this network may be filtering it (s
              "Try another network or a phone hotspot.")
 NET_HELP = "Can't reach Telegram: check your internet connection."
 TOKEN_HELP = "Telegram rejected the bot token. Run  reelay setup  to enter a new one."
-CONFLICT_HELP = "Reelay is already running somewhere else with this bot token. Stop the other copy first."
+CONFLICT_HELP = "Omnividens is already running somewhere else with this bot token. Stop the other copy first."
 
 
 def explain_network_error(error: BaseException) -> str:
@@ -161,7 +161,7 @@ def main(argv: list[str] | None = None) -> int:
     app.add_error_handler(make_error_handler(debug="--debug" in argv))
     if "--pair" in argv or not pairing.paired_users():
         print(f"Open your bot in Telegram and send:  /start {pairing.new_code()}  (valid 15 minutes)")
-    print("Reelay is running. Press Ctrl+C to stop.")
+    print("Omnividens is running. Press Ctrl+C to stop.")
     try:
         return serve(app)
     finally:

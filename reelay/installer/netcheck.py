@@ -23,7 +23,7 @@ INTERFERING = ("Something on this network is interfering with secure connections
                "(common on school/work Wi-Fi). Use another network or a phone hotspot.")
 NO_CERTS = ("Your Mac can't verify the security certificate of any website, so this isn't about Telegram. "
             "Check the date and time in System Settings > General > Date & Time. If they are right, "
-            "tell whoever gave you Reelay that Python has no trusted certificates.")
+            "tell whoever gave you Omnividens that Python has no trusted certificates.")
 TIMEOUT = "Telegram didn't answer in time. Check your internet connection."
 UNREACHABLE = "I couldn't reach Telegram. Check your internet connection."
 DNS_BLOCKED = "I couldn't find Telegram. Check your internet connection, or this network may be blocking Telegram."

@@ -429,7 +429,7 @@ def test_doctor_flags_loose_permissions_and_gone_folders(home):
     os.chmod(CONFIG(home), 0o644)
     checks = {c.name: c for c in config_checks(CONFIG(home))}
     assert not checks["Settings file is private"].ok and "chmod 600" in checks["Settings file is private"].fix
-    assert "no longer exist" in checks["Project folders Reelay may work in"].detail
+    assert "no longer exist" in checks["Project folders Omnividens may work in"].detail
 
 
 def test_doctor_broken_config_does_not_crash(home):
