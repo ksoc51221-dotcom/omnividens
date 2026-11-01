@@ -138,7 +138,7 @@ def _routed_run(routed: Routed, repo, run_dir, timeout_s, verdict, note, report,
     sub_dir.mkdir(mode=0o700)
     result = _attempt(routed, backend, repo, sub_dir, timeout_s)
     tokens, seconds, logs = result.tokens, result.seconds, [result.output]
-    escalated = False
+    local_ran = result.backend == "local"
     if (not result.ok and backend == "local" and configured == "auto" and routing.classify(repo)[0]):
         claude = next((b for b in routing.CLAUDE_BACKENDS if available.get(b)), None)
         if claude and routing.claude_used_today() < cap:
@@ -148,7 +148,7 @@ def _routed_run(routed: Routed, repo, run_dir, timeout_s, verdict, note, report,
             result = _attempt(routed, claude, repo, retry_dir, timeout_s)
             tokens, seconds = tokens + result.tokens, seconds + result.seconds
             logs = [first_note, result.output]
-            reason, escalated = f"escalated from local, which failed on this light skill; {reason}", True
+            reason = f"escalated from local, which failed on this light skill; {reason}"
     head = f"Ran in isolation on {result.backend} ({result.model}) — {reason}"
     if not result.ok:
         head = f"It did not run cleanly in isolation on {result.backend} ({result.model}) — {reason}"
@@ -156,4 +156,6 @@ def _routed_run(routed: Routed, repo, run_dir, timeout_s, verdict, note, report,
         head += f" · ${result.cost_usd:.4f} (cap ${runner_mod.max_trial_usd():.2f})"
     elif result.backend == "api":
         head += f" · cap ${runner_mod.max_trial_usd():.2f}"
-    return report(verdict, True, result.ok, tokens, seconds, head + ".", f"{head}\n{note}\n" + "\n".join(logs)[:3500])
+    out = report(verdict, True, result.ok, tokens, seconds, head + ".", f"{head}\n{note}\n" + "\n".join(logs)[:3500])
+    out.local_ran = local_ran
+    return out

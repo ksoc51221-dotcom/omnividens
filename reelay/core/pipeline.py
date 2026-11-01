@@ -44,7 +44,6 @@ log = logging.getLogger(__name__)
 
 Send = Callable[[str, Reply], None]  # thread-safe: may be called from any thread
 RUN, CANCEL = "run", "cancel"
-LOCAL_TRIAL_MARK = " on local ("  # the sandbox's report text says which backend ran
 MAX_TRIALS = 3  # candidates tried per video (each one costs time and maybe money)
 MAX_QUEUED = 5  # jobs waiting per user
 MAX_REMEMBERED = 200  # reports / confirmations kept in memory
@@ -363,7 +362,7 @@ class Pipeline:
             self._say(uid, f"🧪 Testing in the sandbox ({i}/{len(candidates)}): {one_line(candidate.name, 60)}…", profile)
             try:
                 report = self._run_trial(uid, candidate, profile, allow_local=not local_used)
-                local_used = local_used or LOCAL_TRIAL_MARK in report.fit
+                local_used = local_used or report.local_ran
             except Exception:  # noqa: BLE001 - sandbox contract says never, but be safe
                 log.exception("trial crashed")
                 self.send(uid, f"The sandbox crashed while testing {one_line(candidate.name, 60)}. "

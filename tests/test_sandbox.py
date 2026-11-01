@@ -695,9 +695,7 @@ def test_pipeline_runs_at_most_one_local_trial_per_video(tmp_path):
 
     def real_like(candidate, allow_local=True, notify=None):
         seen.append(allow_local)
-        local = allow_local
-        fit = ("Ran in isolation on local (qwen3:8b) — light" if local else "Ran in isolation on subscription (m) — x")
-        return TrialReport(candidate, True, True, "clean", 1, 1.0, fit)
+        return TrialReport(candidate, True, True, "clean", 1, 1.0, "x", local_ran=allow_local)
 
     stub = SimpleNamespace(deps=SimpleNamespace(run_trial=real_like), send=lambda *a: sent.append(a),
                            _say=lambda uid, text, profile: sent.append(text), _lock=threading.Lock(),
@@ -706,7 +704,6 @@ def test_pipeline_runs_at_most_one_local_trial_per_video(tmp_path):
     cands = [Candidate(f"c{i}", "skill", f"https://github.com/o/r{i}") for i in range(3)]
     pipeline.Pipeline._trials(stub, "u", Verdict("s", [], cands), Profile(user_id="u"))
     assert seen == [True, False, False]
-    assert pipeline.LOCAL_TRIAL_MARK in real_like(cands[0]).fit
 
     plain = []  # a run_trial without the new parameters is still called the old way
     stub.deps.run_trial = lambda c: plain.append(c.name) or TrialReport(c, True, False, "clean", 0, 0.0, "x")
@@ -714,12 +711,57 @@ def test_pipeline_runs_at_most_one_local_trial_per_video(tmp_path):
     assert plain == ["c0"]
 
 
-def test_real_local_report_text_carries_the_pipeline_mark(tmp_path):
-    from reelay.core.pipeline import LOCAL_TRIAL_MARK
-    ok = trial(tmp_path, light_repo, ALL, Launcher())
-    bad = trial(tmp_path, light_repo, {**ALL, "subscription": False, "api": False}, Launcher(ok={"local": False}))
+def test_local_ran_is_set_for_local_and_escalated_trials_only(tmp_path):
+    plain = trial(tmp_path, light_repo, ALL, Launcher())
+    escalated = trial(tmp_path, light_repo, ALL, Launcher(ok={"local": False}))
     claude = trial(tmp_path, heavy_repo, ALL, Launcher())
-    assert LOCAL_TRIAL_MARK in ok.fit and LOCAL_TRIAL_MARK in bad.fit and LOCAL_TRIAL_MARK not in claude.fit
+    scan_only = trial(tmp_path, heavy_repo, NONE, Launcher())
+    assert plain.local_ran and escalated.local_ran and "escalated" in escalated.fit
+    assert not claude.local_ran and not scan_only.local_ran
+
+
+def test_pipeline_counts_an_escalated_local_trial_as_local_used():
+    import threading
+    from types import SimpleNamespace
+
+    from reelay.core import pipeline
+    from reelay.core.types import Profile, Verdict
+
+    seen = []
+
+    def run(candidate, allow_local=True, notify=None):
+        seen.append(allow_local)  # the report says "subscription", but a local attempt ran first
+        return TrialReport(candidate, True, True, "clean", 1, 1.0,
+                           "Ran in isolation on subscription (m) — escalated from local", local_ran=True)
+
+    stub = SimpleNamespace(deps=SimpleNamespace(run_trial=run), send=lambda *a: None,
+                           _say=lambda *a: None, _lock=threading.Lock(), _reports=SimpleNamespace(put=lambda *a: None))
+    stub._run_trial = lambda *a, **k: pipeline.Pipeline._run_trial(stub, *a, **k)
+    cands = [Candidate(f"c{i}", "skill", f"https://github.com/o/r{i}") for i in range(3)]
+    pipeline.Pipeline._trials(stub, "u", Verdict("s", [], cands), Profile(user_id="u"))
+    assert seen == [True, False, False]
+
+
+def test_terminal_guard_keeps_run_trial_signature_so_limits_reach_it():
+    import inspect
+
+    from reelay.terminal import runner as term_runner
+
+    got = {}
+
+    def real_like(candidate, allow_local=True, notify=None):
+        got["args"] = (allow_local, notify)
+        return TrialReport(candidate, True, False, "clean", 0, 0.0, "x")
+
+    term = term_runner._Terminal.__new__(term_runner._Terminal)
+    term.failed, term.debug, term.host, term.net_message = False, False, "h", ""
+    guarded = term.guard(real_like)
+    assert "allow_local" in inspect.signature(guarded).parameters
+    from reelay.core import pipeline
+    from types import SimpleNamespace
+    stub = SimpleNamespace(deps=SimpleNamespace(run_trial=guarded), _say=lambda *a: None)
+    pipeline.Pipeline._run_trial(stub, "u", CAND, None, allow_local=False)
+    assert got["args"][0] is False and callable(got["args"][1])
 
 
 def test_local_prompt_is_a_parameter():
