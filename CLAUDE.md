@@ -29,7 +29,7 @@ Spec `docs/SPEC.md` · Architecture `docs/ARCHITECTURE.md` · Board `docs/TASKS.
 ## Status (29 Oct 2026)
 
 - T1–T9 and T11 merged; 310 tests pass. T10 (second adapter: Codex or Gemini) not started, owner hasn't chosen.
-- Not yet run live: Telegram end-to-end. The owner's school Wi-Fi (Securly) blocks `api.telegram.org`; `reelay doctor` reports it. Live test happens on a hotspot or home Wi-Fi.
+- Not yet run live: Telegram end-to-end. The owner's school Wi-Fi (Securly) does NOT block `api.telegram.org`: its DNS points it at a Securly proxy that re-signs TLS ("Securly Mitm Certificate") and passes traffic through to Telegram (checked 3 Nov 2026). The interception is DNS-only (school DHCP hands out Securly resolvers; Telegram's real IP serves its genuine GoDaddy cert; MTProto data centers are open), which is why other people's bots can work there. This Mac has no Securly CA installed and the bot trusts only `certifi`, so verification fails; `reelay doctor` reports it. Live test happens on a hotspot or home Wi-Fi unless the owner installs Securly's CA and the bot is taught to use the macOS trust store (owner's call, privacy tradeoff: Securly then sees the bot token and messages).
 - GitHub repo not created yet; README install URL stays a placeholder until it is.
 
 ## Hard rules
