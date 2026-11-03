@@ -4,6 +4,7 @@ Run with `run_bot(bot)`; push reports with `send_reply(...)`.
 """
 
 import logging
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -55,12 +56,16 @@ async def handle_update(bot: ReelayBot, update) -> Reply | None:
     if attachment is not None and bot.pairing.is_paired(user_id):
         if (attachment.file_size or 0) > MAX_DOWNLOAD_BYTES:
             return too_big_reply()
+        tmp_dir = None
         try:
             tg_file = await attachment.get_file()
             # Never use the sender's file name: it could contain "../".
-            file_path = Path(tempfile.mkdtemp(prefix="reelay-")) / f"{attachment.file_unique_id}.mp4"
+            tmp_dir = Path(tempfile.mkdtemp(prefix="reelay-"))
+            file_path = tmp_dir / f"{attachment.file_unique_id}.mp4"
             await tg_file.download_to_drive(file_path)
         except Exception:
+            if tmp_dir is not None:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
             return download_failed_reply()
     forwarded = getattr(message, "forward_origin", None) is not None
     return bot.handle_message(Incoming(user_id, text, file_path, forwarded))
@@ -87,7 +92,8 @@ def build_application(bot: ReelayBot, token: str | None = None):
         reply = bot.handle_button(str(query.from_user.id), query.data or "")
         if reply:
             await query.edit_message_reply_markup(None)  # buttons used up
-            await query.message.reply_text(reply.text, link_preview_options=_no_preview())
+            await query.get_bot().send_message(  # query.message may be inaccessible
+                query.from_user.id, reply.text, link_preview_options=_no_preview())
 
     app.add_handler(CallbackQueryHandler(on_button))
     # UpdateType.MESSAGE = new messages only; an edited message must not re-run the old link/instruction.

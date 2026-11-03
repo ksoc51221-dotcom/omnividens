@@ -43,12 +43,14 @@ class Pairing:
 
     def new_code(self) -> str:
         """Make a fresh one-time code (shown on the user's own machine)."""
+        self._state = self._load()  # another process may have written codes or users
         code = "".join(secrets.choice(_ALPHABET) for _ in range(CODE_LENGTH))
         self._state["codes"][code] = self._clock() + CODE_TTL_S
         self._save()
         return code
 
     def is_paired(self, user_id: str) -> bool:
+        self._state = self._load()
         return user_id in self._state["users"]
 
     def try_pair(self, user_id: str, code: str) -> bool:
@@ -57,6 +59,7 @@ class Pairing:
             return True
         if self._failures.get(user_id, 0) >= MAX_FAILED_ATTEMPTS:
             return False
+        self._state = self._load()
         code = code.strip().upper()
         expires = self._state["codes"].get(code)
         if expires is None or expires < self._clock():

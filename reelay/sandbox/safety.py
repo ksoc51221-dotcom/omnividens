@@ -59,7 +59,10 @@ def find_problem(repo: Path) -> str | None:
         if not p.is_file():
             continue
         files += 1
-        total += p.stat().st_size
+        try:
+            total += p.stat().st_size
+        except OSError:
+            return f"unreadable file ({p.relative_to(repo)})"
         if files > MAX_FILES or total > MAX_BYTES:
             return "too large to trial (too many files or over 50 MB)"
         name = p.name.lower()

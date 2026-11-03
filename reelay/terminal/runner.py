@@ -41,8 +41,12 @@ class TerminalNetworkError(Exception):
 def classify(arg: str) -> tuple[str, Job]:
     """('file' | 'not_video' | 'link' | 'instruction', Job). An existing file wins; the rest is the bot's own rule."""
     text = arg.strip()
-    path = Path(text).expanduser()
-    if text and path.is_file():
+    try:
+        path = Path(text).expanduser()
+        is_file = bool(text) and path.is_file()
+    except (OSError, RuntimeError, ValueError):  # too long, bad "~user", NUL byte: not a file
+        is_file = False
+    if is_file:
         kind = "file" if path.suffix.lower() in _VIDEO_EXT else "not_video"
         return kind, message_to_job(Incoming(USER_ID, "", path.resolve()))
     job = message_to_job(Incoming(USER_ID, text))

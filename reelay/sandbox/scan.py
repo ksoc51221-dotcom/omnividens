@@ -33,5 +33,8 @@ def scan(path: Path, timeout_s: int = 60) -> tuple[str, str]:
         return "review", "skill-scan failed or timed out"
     if not isinstance(rows, list) or not rows:
         return "review", "skill-scan found no skill or plugin to judge"
+    rows = [r for r in rows if isinstance(r, dict)]
+    if not rows:
+        return "review", "skill-scan found no skill or plugin to judge"
     findings = sum(len(r.get("findings", [])) for r in rows)
     return map_verdict(rows), f"skill-scan: {len(rows)} unit(s), {findings} finding(s)"

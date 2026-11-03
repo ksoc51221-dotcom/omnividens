@@ -111,3 +111,8 @@ def test_non_dict_haiku_answer_gets_retry_question():
     from reelay.router.router import RETRY_QUESTION
     result = route("please tidy the garden notes somehow", Bad())
     assert isinstance(result, Clarification) and result.question == RETRY_QUESTION
+
+
+def test_t22_on_is_not_a_model_cue():
+    assert parse("write a poem on haiku structure").model is None
+    assert parse("use haiku for this").model == "haiku"

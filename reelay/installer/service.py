@@ -10,6 +10,7 @@ import plistlib
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -65,7 +66,7 @@ def is_running(run: Runner = _run) -> bool:
 
 
 def install(run: Runner = _run, home: Path | None = None, command: list[str] | None = None,
-            path_env: str | None = None) -> str:
+            path_env: str | None = None, sleep=time.sleep) -> str:
     """Write the agent and start it. Returns "" on success or a friendly error message."""
     plist = plist_path(home)
     log = reelay_home() / "reelay.log"
@@ -78,6 +79,9 @@ def install(run: Runner = _run, home: Path | None = None, command: list[str] | N
     try:
         run(["launchctl", "bootout", f"{domain}/{LABEL}"])  # restart cleanly if it was already loaded
         result = run(["launchctl", "bootstrap", domain, str(plist)])
+        if result.returncode != 0:
+            sleep(1)  # bootout can still be finishing; retry once
+            result = run(["launchctl", "bootstrap", domain, str(plist)])
     except (OSError, subprocess.SubprocessError):
         return "I couldn't talk to launchctl (the macOS service manager)."
     if result.returncode != 0:
