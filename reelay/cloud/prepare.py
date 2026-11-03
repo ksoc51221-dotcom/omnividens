@@ -7,6 +7,7 @@ from pathlib import Path
 
 from reelay.cloud.job import Job, first_url, github_links, parse_job
 from reelay.cloud.relay import Relay, RelayError
+from reelay.cloud.speech import find_media, local_transcript
 from reelay.video import load_video
 from reelay.video.errors import VideoError
 
@@ -32,7 +33,7 @@ def _bundle_dict(b, caption_text: str, links: list[str]) -> dict:
     }
 
 
-def run(job_text: str, workdir: str, relay_factory=Relay) -> int:
+def run(job_text: str, workdir: str, relay_factory=Relay, transcribe=local_transcript) -> int:
     try:
         job = parse_job(job_text)
     except RelayError as e:
@@ -51,11 +52,13 @@ def run(job_text: str, workdir: str, relay_factory=Relay) -> int:
         else:
             source = url
         bundle = load_video(source, work / "video")
+        data = _bundle_dict(bundle, job.text, [])
+        if not data["transcript"]:
+            data["transcript"] = transcribe(find_media(work / "video", Path(source) if job.file_id else work / "video"))
         profile = relay.get_profile()
-        links = github_links(job.text, bundle.caption, bundle.transcript)
+        data["github_links"] = github_links(job.text, bundle.caption, data["transcript"])
         (work / "job.json").write_text(json.dumps(job.raw), encoding="utf-8")
-        (work / "bundle.json").write_text(
-            json.dumps(_bundle_dict(bundle, job.text, links), ensure_ascii=False, indent=2), encoding="utf-8")
+        (work / "bundle.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         (work / "profile.json").write_text(json.dumps(profile, ensure_ascii=False), encoding="utf-8")
         return 0
     except VideoError as e:

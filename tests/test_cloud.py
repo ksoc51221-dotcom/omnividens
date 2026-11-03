@@ -171,3 +171,34 @@ def test_report_control_chars(fake, tmp_path):
     _write_report_dir(tmp_path, {"summary": "a\x1b[31mred\r\nline", "claims": []})
     run_report(relay, tmp_path)
     assert "\x1b" not in relay.sent[0][1] and "\r" not in relay.sent[0][1]
+
+
+def test_no_subtitles_falls_back_to_local_speech_to_text(fake, monkeypatch, tmp_path):
+    relay, _ = fake
+    real = prepare.load_video
+
+    def silent(source, work, **kw):
+        b = real(source, work, **kw)
+        (Path(work) / "clip.mp4").write_bytes(b"x" * 10)
+        return VideoBundle(source_url=b.source_url, frames=b.frames, transcript="", caption="", duration_s=5.0)
+
+    monkeypatch.setattr(prepare, "load_video", silent)
+    heard = []
+    code = prepare.run(job("https://www.tiktok.com/@a/video/1"), str(tmp_path), relay_factory=lambda url: relay,
+                       transcribe=lambda media: heard.append(media.name) or "[0:01] try github.com/x/y")
+    assert code == 0 and heard == ["clip.mp4"]
+    assert json.loads((tmp_path / "bundle.json").read_text())["transcript"] == "[0:01] try github.com/x/y"
+
+
+def test_local_transcript_never_raises_and_formats(tmp_path):
+    from types import SimpleNamespace
+    from reelay.cloud.speech import local_transcript
+    media = tmp_path / "a.mp4"
+    media.write_bytes(b"x")
+    assert local_transcript(None) == ""
+
+    def broken():
+        raise RuntimeError("model download blocked")
+    assert local_transcript(media, model_factory=broken) == ""
+    model = SimpleNamespace(transcribe=lambda path, vad_filter: ([SimpleNamespace(start=65.2, text=" hi ")], None))
+    assert local_transcript(media, model_factory=lambda: model) == "[1:05] hi"

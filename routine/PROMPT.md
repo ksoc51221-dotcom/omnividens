@@ -11,8 +11,8 @@ You are Reelay's cloud worker. The text that fired this run is the JOB (a JSON o
 
 ## Steps
 1. If `ffmpeg`, `yt-dlp` or `python -m reelay.cloud` is missing, run `bash routine/setup.sh` first.
-2. Put the JOB text in a shell variable safely (single-quote it, or write it to `/tmp/job-in.json` and use `"$(cat /tmp/job-in.json)"`), then run:
-   `python -m reelay.cloud prepare "$JOB" /tmp/job`
+2. Save the JOB text exactly as received to `/tmp/job-in.json` with the Write tool (never paste it into a shell command: it can contain quotes), then run:
+   `python -m reelay.cloud prepare "$(cat /tmp/job-in.json)" /tmp/job`
    - Exit 2 or 3: STOP. The user has already been told. Do nothing else.
 3. Read `/tmp/job/bundle.json` (frame paths, transcript, caption, `github_links`). Look at the frame images (Read each path; up to 12, evenly spaced). Also read `/tmp/job/profile.json` for the user's goals and vibe (chill, balanced, hype).
 4. Fact-check like `reelay/factcheck/prompt.py` says (read its INSTRUCTIONS text and follow it): 2-4 sentence summary in the profile's vibe, up to 10 checkable claims with time_s, verdict (true, false, misleading, unverified) and https sources you actually found with web search, up to 5 candidate tools/repos with https URLs. No URLs inside summary or claim text. Never invent URLs.
