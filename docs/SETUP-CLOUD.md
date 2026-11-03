@@ -1,15 +1,46 @@
 # Cloud setup checklist
 
-You type every secret yourself. Claude never sees or handles your bot token, relay secret or routine token. Do these in order.
+You type every secret yourself. Claude never sees your bot token, relay secret or routine token.
+About 15 minutes. Do the steps in order.
 
-1. **GitHub repo.** Create a new repo on github.com (private is fine) and push this project to it.
-2. **Deploy the relay.** Go to Deno Deploy, sign in with GitHub, create a project from your repo, and follow `relay/README.md` (entry file and steps are there). Note the relay URL it gives you.
-3. **Relay env vars** (Deno Deploy dashboard, you type them): `TELEGRAM_BOT_TOKEN` (from @BotFather), `WEBHOOK_SECRET` (any long random string), `RELAY_SECRET` (another long random string). Leave `OWNER_TELEGRAM_ID` empty for now. Optional: `MAX_RUNS_PER_HOUR`.
-4. **Create the routine** (Claude Code on the web, Routines): repo = your repo, model = Sonnet, prompt = the contents of `routine/PROMPT.md`, trigger = API. Copy the fire URL and the token it shows. Put them in the relay env vars `ROUTINE_FIRE_URL` and `ROUTINE_TOKEN`.
-5. **Routine environment.** Network access = Custom with this allowlist: `api.telegram.org`, your relay host, `*.tiktok.com`, `*.tiktokcdn.com`, `*.tiktokv.com`, `*.youtube.com`, `*.googlevideo.com`, `*.ytimg.com`, `youtu.be`, `github.com`, `codeload.github.com`, `pypi.org`, `files.pythonhosted.org`, `huggingface.co`, `*.hf.co` (speech-to-text model download). Uncertain (add if setup or a download fails): `deno.land`, `dl.deno.land`, `github.com` release downloads (`objects.githubusercontent.com`), `archive.ubuntu.com` and `security.ubuntu.com` (for ffmpeg via apt, may already be preinstalled). Setup script: `bash routine/setup.sh`.
-6. **Network secret.** In the same environment add a secret for your relay host: header `Authorization` = `Bearer <your RELAY_SECRET>`. The proxy adds it on calls to the relay, so the VM never holds it.
-7. **Check the relay.** Open the relay URL in a browser. It should say "Connected". If it lists missing env vars, add them.
-8. **Find your Telegram ID.** Message your bot `/start`. It answers "Your Telegram ID is N". Put N in the relay env var `OWNER_TELEGRAM_ID` and save.
-9. **Test.** Share a TikTok link to the bot. You should get "Got it. Takes a few minutes." and then one report. YouTube may be blocked from cloud IPs; if so, send the video file instead.
+## Claude does (after you say yes)
 
-Local test (optional): `RELAY_SECRET` set in your own shell makes the client add the header itself. Never paste it into chat.
+- **A. GitHub repo.** Creates a **private** repo on your GitHub account and pushes this project to it.
+- **B. Routine.** Creates the routine through the API: Sonnet, this repo, prompt = `routine/PROMPT.md`, no connectors.
+
+## You do
+
+1. **Make two random secrets.** Run this twice in your own Terminal and keep both outputs in Notes. Never paste them into chat.
+   ```bash
+   openssl rand -hex 32
+   ```
+   The first one is `WEBHOOK_SECRET`, the second one is `RELAY_SECRET`.
+2. **Deploy the relay.**
+   - Go to dash.deno.com and click **Sign in with GitHub**.
+   - Click **New Project**, pick the repo from step A, and set the entrypoint to `relay/main.ts`.
+   - Copy the URL it gives you (`https://….deno.dev`).
+   - Check that KV is available on your plan; see `relay/README.md`.
+3. **Relay settings** (Deno Deploy → your project → Settings → Environment Variables):
+   - `TELEGRAM_BOT_TOKEN`: from @BotFather.
+   - `WEBHOOK_SECRET` and `RELAY_SECRET`: from step 1.
+   - Leave `OWNER_TELEGRAM_ID` empty for now.
+4. **Routine trigger.** Open the routine Claude made (claude.ai/code/routines), then **Add trigger → API**.
+   - Copy the fire URL into the relay variable `ROUTINE_FIRE_URL`.
+   - Copy the token into `ROUTINE_TOKEN`. The token is shown only once.
+5. **Routine environment** (claude.ai/code → environment **Default**):
+   - **Setup script:** `bash routine/setup.sh`.
+   - **Network access → Custom**, keep the defaults checked, and add: your relay host, `api.telegram.org`, `*.tiktok.com`, `*.tiktokcdn.com`, `*.tiktokv.com`, `*.youtube.com`, `*.googlevideo.com`, `*.ytimg.com`, `youtu.be`, `huggingface.co`, `*.hf.co`.
+     - If a run says `host_not_allowed`, add the host it names.
+     - Switching from Full to Custom also tightens what tools from videos can reach.
+   - **Network secret:** host = your relay host, header `Authorization`, value `Bearer ` + your `RELAY_SECRET`.
+6. **Connect.**
+   - Open your relay URL in a browser and check that it says "Connected".
+   - Send `/start` to your bot. It replies "Your Telegram ID is N".
+   - Put N into `OWNER_TELEGRAM_ID` and save.
+7. **Test.** Share a TikTok link with the bot.
+   - You should get "Got it. Takes a few minutes." and then one report.
+   - If YouTube links fail, send the video file instead.
+
+## If something goes wrong
+
+Tell Claude "check the last routine run". It can read the run log (never your secrets) and fix the code.
