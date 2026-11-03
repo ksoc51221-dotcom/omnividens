@@ -124,7 +124,7 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
   }
 
   async function callback(cb: Json) {
-    const chat = cb.message?.chat?.id;
+    const chat = cb.message?.chat?.id ?? cb.from?.id; // message is inaccessible after 48 h
     const m = /^(adopt|skip):([\w-]{1,64})$/.exec(String(cb.data ?? ""));
     await tg("answerCallbackQuery", { callback_query_id: cb.id });
     if (!m || typeof chat !== "number") return;
@@ -141,10 +141,15 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
 
     const hour = Math.floor(deps.now() / 3600000);
     const key = ["rate", hour];
-    const n = (await kv.get<number>(key)).value ?? 0;
     const max = Number(env("MAX_RUNS_PER_HOUR")) || 20;
-    if (n >= max) return void await say(chat, "Busy, try again later");
-    await kv.set(key, n + 1, { expireIn: 2 * 3600 * 1000 });
+    for (;;) { // check-and-set so two messages at once can't both slip under the cap
+      const cur = await kv.get<number>(key);
+      const n = cur.value ?? 0;
+      if (n >= max) return void await say(chat, "Busy, try again later");
+      const res = await kv.atomic().check(cur).set(key, n + 1, { expireIn: 2 * 3600 * 1000 })
+        .commit();
+      if (res.ok) break;
+    }
 
     await say(chat, "Got it. Takes a few minutes.");
     const f = files.sort((a, b) => (b.file_size ?? 0) - (a.file_size ?? 0))[0];
