@@ -21,6 +21,8 @@ Safety rules this file keeps (from the module reviews):
 import inspect
 import json
 import logging
+import math
+import os
 import re
 import shutil
 import tempfile
@@ -72,7 +74,8 @@ def append_decision(user_id: str, report_id: str, candidate: Candidate, action: 
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     line = json.dumps({"user": user_id, "report": report_id, "action": action,
                        "name": candidate.name, "url": candidate.url})
-    with open(path, "a", encoding="utf-8") as f:
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    with os.fdopen(fd, "a", encoding="utf-8") as f:
         f.write(line + "\n")
     path.chmod(0o600)
 
@@ -101,7 +104,11 @@ class UserQueue:
             waiting = self._pending.get(user_id)
             if waiting is None:  # nothing running for this user: start a drain loop
                 self._pending[user_id] = deque([fn])
-                self._pool.submit(self._drain, user_id)
+                try:
+                    self._pool.submit(self._drain, user_id)
+                except Exception:
+                    del self._pending[user_id]
+                    raise
                 return True
             if len(waiting) >= MAX_QUEUED:
                 return False
@@ -155,7 +162,8 @@ def format_verdict(verdict: Verdict, profile: Profile, bundle: VideoBundle) -> s
     if verdict.claims and detail != "short":
         lines.append("Claims (sources are what the model cited, not proof):")
         for c in verdict.claims:
-            when = f"[{int(c.time_s) // 60}:{int(c.time_s) % 60:02d}] " if c.time_s is not None else ""
+            ok_time = isinstance(c.time_s, (int, float)) and math.isfinite(c.time_s) and c.time_s >= 0
+            when = f"[{int(c.time_s) // 60}:{int(c.time_s) % 60:02d}] " if ok_time else ""
             lines.append(f"{_ICONS.get(c.verdict, '❔')} {when}{one_line(c.text)} ({c.verdict})")
             if detail == "deep":
                 lines += [f"    source: {s}" for s in c.sources[:3]]
@@ -193,7 +201,7 @@ def format_trial(report: TrialReport, profile: Profile) -> str:
     ]
     if profile.goals:
         lines.append("Your goals: " + one_line("; ".join(profile.goals), 200))
-    lines += ["", f"Source: {c.url}", receipt(f"its repo at {urlhost(c.url)}", f"static scan → {report.scan_verdict}",
+    lines += ["", f"Source: {one_line(c.url, 200)}", receipt(f"its repo at {one_line(urlhost(c.url), 80)}", f"static scan → {report.scan_verdict}",
                                            ran, refused)]
     return "\n".join(lines)
 
@@ -285,6 +293,8 @@ class Pipeline:
             return Reply("Cancelled. Nothing was run.")
         instruction = entry[1]
         if not self.queue.submit(user_id, lambda: self._run_instruction(user_id, instruction)):
+            with self._lock:
+                self._confirms.put(confirm_id, entry)  # keep the Run button working
             return Reply("I still have a few things queued for you. Tap again in a minute.")
         return Reply("Running it.")
 
@@ -330,12 +340,16 @@ class Pipeline:
 
     def _video(self, job: Job) -> None:
         uid = job.user_id
-        profile = self._profile(uid)
-        self._learn(uid, job.text)  # the note the user typed with the link, not the video
-        # Only a link, or a file the bot itself saved: never a path the user typed.
-        source = str(job.file) if job.file else (job.url or "")
-        work = Path(tempfile.mkdtemp(prefix="reelay-job-"))
+        work = None
         try:
+            profile = self._profile(uid)
+            try:
+                self._learn(uid, job.text)  # the note the user typed with the link, not the video
+            except Exception:  # noqa: BLE001 - profile learning must not block the job
+                log.exception("could not update profile for user %s", uid)
+            # Only a link, or a file the bot itself saved: never a path the user typed.
+            source = str(job.file) if job.file else (job.url or "")
+            work = Path(tempfile.mkdtemp(prefix="reelay-job-"))
             self._say(uid, "👀 Watching the video…", profile)
             try:
                 bundle = self.deps.load_video(source, work)
@@ -347,7 +361,8 @@ class Pipeline:
             self.send(uid, format_verdict(verdict, profile, bundle))
             self._trials(uid, verdict, profile)
         finally:
-            shutil.rmtree(work, ignore_errors=True)
+            if work is not None:
+                shutil.rmtree(work, ignore_errors=True)
             _remove_download(job.file)
 
     def _trials(self, uid: str, verdict: Verdict, profile: Profile) -> None:
@@ -389,7 +404,7 @@ class Pipeline:
         with self._lock:
             before = self._unclear.pop(uid, None)  # the user is answering our question
         if before:
-            text = f"{before}\n{text}"[:1000]
+            text = f"{before}\n{text}"[-1000:]
         self._learn(uid, job.text)
         routed = self.deps.route(text)
         if isinstance(routed, Clarification):

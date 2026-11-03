@@ -68,9 +68,9 @@ class ClaudeCodeAdapter(Adapter):
         try:
             project = check_project(instruction.project, config)
             argv, stdin_text = self.build_argv(instruction, config)
-        except ValueError as e:
+            timeout = int(config.get("timeout_s", DEFAULT_TIMEOUT_S))
+        except (ValueError, TypeError) as e:
             return AdapterResult(ok=False, error=f"refused: {e}")
-        timeout = int(config.get("timeout_s", DEFAULT_TIMEOUT_S))
         start = time.monotonic()
         try:
             proc = self._runner(argv, project, stdin_text, timeout)

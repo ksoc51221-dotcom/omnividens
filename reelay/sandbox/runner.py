@@ -232,8 +232,14 @@ def run_backend(backend: str, repo_dir: Path, run_dir: Path, timeout_s: int,
     try:
         stdout, stderr = proc.communicate(timeout=timeout_s)
     except subprocess.TimeoutExpired:
-        os.killpg(proc.pid, signal.SIGKILL)  # claude and anything it started
-        proc.communicate()
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)  # claude and anything it started
+        except OSError:  # already gone
+            pass
+        try:
+            proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
         return RunResult(False, time.monotonic() - start, 0,
                          f"timed out after {timeout_s}s; tokens used are unknown", backend, model)
     seconds = time.monotonic() - start

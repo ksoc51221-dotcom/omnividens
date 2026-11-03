@@ -12,6 +12,7 @@ import uuid
 from pathlib import Path
 
 from reelay.core.config import ConfigError, load_config
+from reelay.video.errors import ToolTimeoutError
 from reelay.video.proc import run_tool
 
 GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
@@ -83,11 +84,14 @@ def has_audio(video: Path) -> bool:
 def whisper_transcribe(video: Path, work_dir: Path, api_key: str) -> str:
     """Extract small mono mp3, send to Groq Whisper, return '[m:ss] text' lines. '' on failure."""
     audio = work_dir / "audio.mp3"
-    run_tool(
-        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-t", "600", "-i", str(video),
-         "-vn", "-ac", "1", "-ar", "16000", "-b:a", "64k", str(audio)],
-        120, capture_output=True,
-    )
+    try:
+        run_tool(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-t", "600", "-i", str(video),
+             "-vn", "-ac", "1", "-ar", "16000", "-b:a", "64k", str(audio)],
+            120, capture_output=True,
+        )
+    except ToolTimeoutError:
+        return ""
     if not audio.exists():
         return ""
     boundary = uuid.uuid4().hex
@@ -107,12 +111,12 @@ def whisper_transcribe(video: Path, work_dir: Path, api_key: str) -> str:
     try:
         with urllib.request.urlopen(request, timeout=120) as resp:
             data = json.loads(resp.read())
-    except (urllib.error.URLError, TimeoutError, ValueError):
+        segments = data.get("segments") or []
+        if not segments and data.get("text"):
+            return data["text"].strip()
+        return "\n".join(
+            f"[{int(s['start']) // 60}:{int(s['start']) % 60:02d}] {s['text'].strip()}"
+            for s in segments if s.get("text", "").strip()
+        )
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):  # URLError/timeouts/http.client are OSError
         return ""
-    segments = data.get("segments") or []
-    if not segments and data.get("text"):
-        return data["text"].strip()
-    return "\n".join(
-        f"[{int(s['start']) // 60}:{int(s['start']) % 60:02d}] {s['text'].strip()}"
-        for s in segments if s.get("text", "").strip()
-    )

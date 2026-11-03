@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 
 from reelay.core.types import Frame
-from reelay.video.errors import FrameError
+from reelay.video.errors import FrameError, ToolTimeoutError
 from reelay.video.proc import run_tool
 
 SCENE_THRESHOLD = 0.4
@@ -68,11 +68,14 @@ def extract_frames(video: Path, out_dir: Path, interval: float = 2.0,
         if duration and t >= duration:
             continue
         path = out_dir / f"frame_{i:03d}.jpg"
-        run_tool(
-            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", str(t),
-             "-i", str(video), "-frames:v", "1", "-vf", f"scale={width}:-2", str(path)],
-            FRAME_TIMEOUT_S, capture_output=True,
-        )
+        try:
+            run_tool(
+                ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", str(t),
+                 "-i", str(video), "-frames:v", "1", "-vf", f"scale={width}:-2", str(path)],
+                FRAME_TIMEOUT_S, capture_output=True,
+            )
+        except ToolTimeoutError:
+            continue  # skip this frame, keep the rest
         if path.exists():
             frames.append(Frame(time_s=t, image=path))
     if not frames:

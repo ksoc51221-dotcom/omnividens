@@ -298,3 +298,52 @@ def test_ipv6_private_forms_rejected(url, tmp_path):
     assert dl.is_private_host(url)
     with pytest.raises(DownloadError, match="local or private"):
         dl.download(url, tmp_path)
+
+
+def test_t22_whisper_returns_empty_on_any_failure(tmp_path, monkeypatch):
+    import http.client
+    from reelay.video import transcript as tr
+    from reelay.video.errors import ToolTimeoutError
+
+    def fake_tool(*a, **k):
+        (tmp_path / "audio.mp3").write_bytes(b"x")
+
+    monkeypatch.setattr(tr, "run_tool", fake_tool)
+    for exc in (http.client.RemoteDisconnected("x"), ConnectionResetError()):
+        monkeypatch.setattr(tr.urllib.request, "urlopen", lambda *a, **k: (_ for _ in ()).throw(exc))
+        assert tr.whisper_transcribe(Path("v.mp4"), tmp_path, "k") == ""
+
+    class Resp:
+        def __init__(self, body): self.body = body
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return self.body
+
+    monkeypatch.setattr(tr.urllib.request, "urlopen", lambda *a, **k: Resp(b'{"segments":[{"start":1}]}'))
+    assert tr.whisper_transcribe(Path("v.mp4"), tmp_path, "k") == ""  # KeyError
+    monkeypatch.setattr(tr.urllib.request, "urlopen", lambda *a, **k: Resp(b"[1]"))
+    assert tr.whisper_transcribe(Path("v.mp4"), tmp_path, "k") == ""  # AttributeError
+
+    def slow(*a, **k):
+        raise ToolTimeoutError("ffmpeg timed out")
+
+    monkeypatch.setattr(tr, "run_tool", slow)
+    assert tr.whisper_transcribe(Path("v.mp4"), tmp_path, "k") == ""
+
+
+def test_t22_frame_timeout_skips_only_that_frame(tmp_path, monkeypatch):
+    from reelay.video import frames as fr
+    from reelay.video.errors import ToolTimeoutError
+    monkeypatch.setattr(fr.shutil, "which", lambda n: "/bin/" + n)
+    monkeypatch.setattr(fr, "probe_duration", lambda v: 10.0)
+    monkeypatch.setattr(fr, "find_scene_cuts", lambda v: [])
+    monkeypatch.setattr(fr, "plan_times", lambda *a: [0.0, 2.0])
+
+    def tool(cmd, *a, **k):
+        if "-ss" in cmd and cmd[cmd.index("-ss") + 1] == "0.0":
+            raise ToolTimeoutError("slow")
+        Path(cmd[-1]).write_bytes(b"x")
+
+    monkeypatch.setattr(fr, "run_tool", tool)
+    out = fr.extract_frames(Path("v.mp4"), tmp_path / "f")
+    assert [f.time_s for f in out] == [2.0]

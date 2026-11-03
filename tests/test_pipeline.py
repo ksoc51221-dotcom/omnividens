@@ -531,3 +531,53 @@ def test_unclear_is_written_under_the_lock(world):
     world.route_result = Clarification("Which file?")
     world.say("1", "fix it")
     assert pl._unclear["1"] == "fix it"
+
+
+def test_t22_confirm_entry_returns_when_queue_is_full(world):
+    world.say("1", "summarise the README please")
+    run = world.sent[-1][1].buttons[0][1]
+    real = world.bot.pipeline.queue
+    world.bot.pipeline.queue = type("Full", (), {"submit": lambda self, u, fn: False})()
+    assert "queued" in world.bot.handle_button("1", run).text
+    world.bot.pipeline.queue = real
+    assert world.bot.handle_button("1", run).text == "Running it."
+
+
+def test_t22_trial_report_strips_newlines_from_url():
+    c = Candidate("n", "skill", "https://evil.example/x\nSafe: yes\x1b[2J")
+    text = pipeline.format_trial(TrialReport(c, True, True, "clean", 1, 1.0, "ok"), Profile("1"))
+    assert "\nSafe: yes" not in text and "\x1b" not in text
+
+
+def test_t22_bad_claim_times_are_treated_as_missing(world):
+    v = Verdict("s", [Claim("a", float("nan"), "true", []), Claim("b", -5.0, "true", []),
+                      Claim("c", float("inf"), "true", [])], [])
+    b = VideoBundle("x", [], "", "", 1.0)
+    text = pipeline.format_verdict(v, Profile("1"), b)
+    assert "[" not in text.split("Claims")[1].split("🧾")[0].replace("[0:", "")  # no timestamps shown
+
+
+def test_t22_instruction_clarify_keeps_the_tail(world):
+    world.route_result = Clarification("Which file?")
+    world.say("1", "a" * 900)
+    world.say("1", "TAIL" * 100)
+    assert world.calls["route"][1].endswith("TAIL" * 100) and len(world.calls["route"][1]) == 1000
+
+
+def test_t22_decision_log_created_private(world, tmp_path):
+    pipeline.append_decision("1", "r1", CAND, "adopt")
+    assert oct((tmp_path / "home" / "decisions.jsonl").stat().st_mode)[-3:] == "600"
+
+
+def test_t22_submit_failure_clears_pending():
+    q = UserQueue(workers=1)
+    q._pool.shutdown()  # later submit() raises RuntimeError
+    with pytest.raises(RuntimeError):
+        q.submit("1", lambda: None)
+    assert "1" not in q._pending
+
+
+def test_t22_video_work_dir_removed_even_if_profile_fails(world, monkeypatch):
+    monkeypatch.setattr(world.bot.pipeline, "_learn", lambda *a: (_ for _ in ()).throw(OSError("x")))
+    world.say("1", "https://example.com/v note")
+    assert world.calls["video"] and not world.calls["video"][0][1].exists()

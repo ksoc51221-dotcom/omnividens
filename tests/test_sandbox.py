@@ -767,3 +767,33 @@ def test_terminal_guard_keeps_run_trial_signature_so_limits_reach_it():
 def test_local_prompt_is_a_parameter():
     argv = runner.build_argv("claude", {}, "m", "local", prompt="hello")
     assert argv[argv.index("-p") + 1] == "hello"
+
+
+def test_t22_scan_ignores_non_dict_rows(monkeypatch, tmp_path):
+    script = tmp_path / "scan.py"
+    script.write_text("")
+    monkeypatch.setattr(scan, "SCAN_SCRIPT", script)
+    monkeypatch.setattr(scan.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(
+        cmd, 0, json.dumps(["junk", 3, {"verdict": "CLEAN", "findings": []}]), ""))
+    assert scan.scan(tmp_path)[0] == "clean"
+
+
+def test_t22_timeout_kill_survives_gone_process(monkeypatch, tmp_path):
+    class Hang(FakeProc):
+        def communicate(self, timeout=None):
+            if timeout == 5 or getattr(self, "killed", False):
+                return "", ""
+            raise subprocess.TimeoutExpired("claude", 1)
+
+    def killpg(*a):
+        raise ProcessLookupError()
+
+    monkeypatch.setattr(runner.os, "killpg", killpg)
+    monkeypatch.setattr(runner.shutil, "which", lambda n: "/bin/claude")
+    monkeypatch.setattr(runner.subprocess, "Popen", lambda *a, **k: Hang(""))
+    repo = light_repo(tmp_path / "repo")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (Path(os.environ["REELAY_HOME"]) / "config.toml").write_text(f'claude_oauth_token = "{SECRET}"\n')
+    res = runner.run_backend("subscription", repo, run_dir, 1)
+    assert not res.ok and "timed out" in res.output

@@ -225,3 +225,7 @@ def test_no_traceback_on_stderr_unless_debug(fakes, capsys):
     assert "Traceback" not in capsys.readouterr().err
     run(fakes, "https://blocked.example.org/v", interactive=False, debug=True)
     assert "Traceback" in capsys.readouterr().err
+
+
+def test_t22_long_instruction_is_not_a_file():
+    assert classify("write a story " * 30)[0] == "instruction"
