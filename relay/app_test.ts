@@ -124,6 +124,7 @@ Deno.test("fire request has exact headers and body shape", async () => {
   const h = fire.init!.headers as Record<string, string>;
   assertEq(h["Authorization"], "Bearer rtok");
   assertEq(h["anthropic-beta"], "experimental-cc-routine-2026-04-01");
+  assertEq(h["anthropic-version"], "2023-06-01");
   assertEq(h["content-type"], "application/json");
   assertEq(JSON.parse(fire.body.text), {
     v: 1,

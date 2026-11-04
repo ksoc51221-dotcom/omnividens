@@ -171,6 +171,7 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
         headers: {
           "Authorization": `Bearer ${env("ROUTINE_TOKEN")}`,
           "anthropic-beta": "experimental-cc-routine-2026-04-01",
+          "anthropic-version": "2023-06-01",
           "content-type": "application/json",
         },
         body: JSON.stringify({ text: JSON.stringify(job) }),
