@@ -10,7 +10,7 @@ Built for the November 2026 hackathon. The Python package and CLI are still call
 
 ## What it does
 
-- 🎬 **Watches** a TikTok / Reel / YouTube Short / X video or an uploaded file: downloads it, samples frames, and gets a transcript (native subtitles, or free on-VM Whisper when there are none).
+- 🎬 **Watches** a TikTok link or an uploaded video file: downloads it, samples frames, and gets a transcript (native subtitles, or free on-VM Whisper when there are none).
 - 🔎 **Fact-checks** the claims it hears, with timestamps and sources found by web search, written for your profile (goals + a chill / balanced / hype vibe).
 - 🧪 **Scans** the GitHub repo a video is selling: a static safety scan plus a read of the code, then a one-line fit verdict. You get **Adopt / Skip** buttons. Adopt never installs anything; it prints a strict `git clone` line you run yourself.
 
@@ -76,7 +76,7 @@ An **Opus orchestrator** session wrote the spec, the shared contract and the tas
 
 | Number | Value (from `git log` and the review files) |
 |---|---|
-| Commits on `main` | 120 over 7 days (28 Oct – 3 Nov 2026) |
+| Commits on `main` | 127 over 8 days (28 Oct – 4 Nov 2026) |
 | Merges of approved branches | 26 |
 | Peer reviews | 20 files, one per task plus follow-ups |
 | BLOCKERs caught before merge | 7 in the first 9 module reviews alone |
@@ -89,16 +89,18 @@ What review caught, for example: the bot **downloaded files from strangers befor
 
 ## Limitations
 
-- **The cloud path has not run end-to-end live yet.** Each piece was tested offline, and a feasibility run on the routine VM confirmed TikTok downloads and Telegram reachability.
+- **What has run live:** a real TikTok went from Telegram through the relay and routine (download, frames, transcript, web-sourced fact-check) and the report came back to Telegram, about 3 minutes end to end (4 Nov 2026). **Not yet run live:** the repo scan with Adopt / Skip, and uploaded video files.
+- **Only TikTok links are on the network allowlist.** Reel and X links fail until their hosts are added, and they may still need a login from cloud IPs. Local mode tries them from your own network.
+- **TikTok downloads rely on yt-dlp's browser impersonation** (`curl-cffi`) to get past a bot check, so they can break whenever TikTok changes it.
 - **YouTube downloads from cloud IPs are unreliable** (YouTube blocks many datacenter IPs). Sending the video file works instead.
-- **Slow and rationed.** A fresh VM per video means a few minutes per reply, and routine runs come out of the owner's Claude plan (capped at 30 runs/hour by the platform, lower by `MAX_RUNS_PER_HOUR`).
+- **Slow and rationed.** A fresh VM per video means about 3 minutes per reply, and routine runs come out of the owner's Claude plan (capped at 30 runs/hour by the platform, lower by `MAX_RUNS_PER_HOUR`).
 - **Fact-check sources are cited by the model**, not proof.
 - **Repo trials are scan-and-read only** in the cloud. Local mode can run a trial in an isolated folder, but that is folder isolation, not a container.
 - Instagram carousels/images fail with a "send a screen recording" message.
 
 ## Roadmap
 
-1. First live end-to-end run, then a demo recording.
+1. Live run of the repo scan and Adopt / Skip, then a demo recording.
 2. Typed instructions in cloud mode (local mode already has them).
 3. Container trials that actually run a repo's quick-start with no secrets present.
 4. Fit scoring against your real projects.
