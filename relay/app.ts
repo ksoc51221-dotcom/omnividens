@@ -12,6 +12,8 @@ const ADOPT_RE = /^git clone -- https:\/\/github\.com\/[\w.-]+\/[\w.-]+$/;
 const FILE_ID_RE = /^[\w-]{1,256}$/;
 const MAX_FILE = 20 * 1024 * 1024;
 const MAX_PROFILE = 64 * 1024;
+const MAX_PROJECT_LINES = 20;
+const MAX_PROJECT_LINE = 200;
 const DAY = 24 * 3600 * 1000;
 const REQUIRED = [
   "TELEGRAM_BOT_TOKEN",
@@ -133,11 +135,40 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
     await say(chat, line ?? "That suggestion expired.");
   }
 
+  // Owner's written project list: handled here, before any routine run, so it costs no routine call.
+  async function projectsCommand(chat: number, arg: string) {
+    const cur = (await kv.get<string[]>(["projects"])).value ?? [];
+    if (!arg) {
+      return void await say(
+        chat,
+        cur.length
+          ? `Your projects (${cur.length}):\n${cur.join("\n")}`
+          : "No project list yet. Send /projects followed by lines like: Name: one line about it.",
+      );
+    }
+    if (arg.toLowerCase() === "clear") {
+      await kv.delete(["projects"]);
+      return void await say(chat, "Project list cleared.");
+    }
+    const lines = arg.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    if (lines.length > MAX_PROJECT_LINES || lines.some((l) => l.length > MAX_PROJECT_LINE)) {
+      return void await say(
+        chat,
+        `Not saved: at most ${MAX_PROJECT_LINES} lines, ${MAX_PROJECT_LINE} characters each.`,
+      );
+    }
+    await kv.set(["projects"], lines);
+    await say(chat, `Saved ${lines.length} project${lines.length === 1 ? "" : "s"}.`);
+  }
+
   async function ownerMessage(msg: Json, updateId: number, origin: string) {
     const chat: number = msg.chat.id;
     const files = [msg.video, msg.document, msg.animation].filter((f) => f?.file_id);
     const text_: string = String(msg.text ?? msg.caption ?? "");
     if (!text_ && !files.length) return;
+    if (!files.length && /^\/projects(@\w+)?(\s|$)/.test(text_.trim())) {
+      return void await projectsCommand(chat, text_.trim().replace(/^\/projects(@\w+)?/, "").trim());
+    }
 
     const hour = Math.floor(deps.now() / 3600000);
     const key = ["rate", hour];
@@ -205,6 +236,18 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
         typeof b?.chat_id !== "number" || typeof b?.text !== "string" || !b.text ||
         (line !== null && (typeof line !== "string" || !ADOPT_RE.test(line)))
       ) return json({ error: "bad request" }, 400);
+      if (b.report === true) { // daily report budget; one report per send
+        const day = Math.floor(deps.now() / DAY);
+        const max = Number(env("MAX_REPORTS_PER_DAY")) || 30;
+        for (;;) {
+          const cur = await kv.get<number>(["reports", day]);
+          const n = cur.value ?? 0;
+          if (n >= max) return json({ error: "daily report limit" }, 429);
+          const res = await kv.atomic().check(cur).set(["reports", day], n + 1, { expireIn: 2 * DAY })
+            .commit();
+          if (res.ok) break;
+        }
+      }
       const parts: string[] = [];
       for (let i = 0; i < b.text.length; i += 4096) parts.push(b.text.slice(i, i + 4096));
       let id: string | null = null;
@@ -249,7 +292,9 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
 
     if (path === "/api/profile") {
       if (req.method === "GET") {
-        return json((await kv.get<Json>(["profile"])).value ?? {});
+        const prof = (await kv.get<Json>(["profile"])).value ?? {};
+        const projects = (await kv.get<string[]>(["projects"])).value ?? [];
+        return json({ ...prof, projects });
       }
       if (req.method === "PUT") {
         const raw = new Uint8Array(await req.arrayBuffer());
@@ -263,6 +308,7 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
         if (v === null || typeof v !== "object" || Array.isArray(v)) {
           return json({ error: "profile must be a JSON object" }, 400);
         }
+        delete v.projects; // the project list lives under its own key and is only set by /projects
         await kv.set(["profile"], v);
         return json({ ok: true });
       }

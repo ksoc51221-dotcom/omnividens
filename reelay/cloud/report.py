@@ -2,28 +2,17 @@
 
 import datetime
 import json
-import re
 from pathlib import Path
 
 from reelay.cloud.job import parse_job
 from reelay.cloud.relay import Relay, RelayError
-from reelay.core.pipeline import clone_command, format_trial, format_verdict, one_line
-from reelay.core.types import Candidate, Frame, Profile, TrialReport, VideoBundle
+from reelay.core import reports as _reports
+from reelay.core.types import Frame, Profile, VideoBundle
 from reelay.factcheck.parse import extract_json, parse_verdict
 from reelay.profile.store import MAX_GOAL_LEN, MAX_GOALS, MAX_TRAIT_LEN, MAX_TRAITS, VIBES
 
-_REPO = re.compile(r"https://github\.com/([A-Za-z0-9][A-Za-z0-9._-]*)/([A-Za-z0-9][A-Za-z0-9._-]*)")
-_SCANS = {"clean", "review", "high"}
 MAX_REPORT = 3800
-
-
-def adopt_line_for(urls) -> str | None:
-    """`git clone -- https://github.com/o/r` for the first plain GitHub repo URL, else None."""
-    for u in urls:
-        m = _REPO.fullmatch(u) if isinstance(u, str) else None
-        if m and m.group(1) not in (".", "..") and m.group(2) not in (".", "..") and not m.group(2).endswith(".git"):
-            return f"git clone -- {u}"
-    return None
+adopt_line_for = _reports.adopt_line_for  # kept for callers: strict github.com/owner/repo only
 
 
 def _profile(d: dict, chat_id) -> Profile:
@@ -35,21 +24,31 @@ def _profile(d: dict, chat_id) -> Profile:
                    traits={str(k)[:MAX_TRAIT_LEN]: str(v)[:MAX_TRAIT_LEN] for k, v in list(traits.items())[:MAX_TRAITS]})
 
 
-def _trial(raw, candidates: list[Candidate], profile: Profile) -> tuple[str, Candidate] | None:
-    """Optional `trial` object in verdict.json. The repo must be one of the validated candidates."""
-    if not isinstance(raw, dict) or not isinstance(raw.get("url"), str):
-        return None
-    cand = next((c for c in candidates if c.url == raw["url"]), None)
-    if cand is None:
-        return None
-    scan = raw.get("scan_verdict") if raw.get("scan_verdict") in _SCANS else "review"
-    secs = raw.get("seconds")
-    secs = float(secs) if isinstance(secs, (int, float)) and not isinstance(secs, bool) and 0 <= secs < 86400 else 0.0
-    fit = raw.get("fit") if isinstance(raw.get("fit"), str) else ""
-    rep = TrialReport(candidate=cand, installed=bool(raw.get("fetched", True)), ran=raw.get("ran") is True,
-                      scan_verdict=scan, tokens_used=0, seconds=secs,
-                      fit=one_line(fit, 300) or "Scan-only: no fit note.")
-    return format_trial(rep, profile), cand
+def _projects(raw) -> list[str]:
+    """Project names from the owner's written list ("Name: one line"). Matching data only."""
+    out = []
+    for line in (raw if isinstance(raw, list) else [])[:20]:
+        name = _reports.plain(str(line).split(":", 1)[0], 80)
+        if name:
+            out.append(name)
+    return out
+
+
+def _build(data: dict, verdict, projects: list[str]):
+    """(reports, left-out names) in video order, at most MAX_REPORTS, one per URL."""
+    reps, seen, left = [], set(), []
+    items = data.get("reports") if isinstance(data.get("reports"), list) else []
+    for item in items:
+        r = _reports.parse_report(item, projects)
+        if r is None or r.url in seen:
+            continue
+        seen.add(r.url)
+        if len(reps) < _reports.MAX_REPORTS:
+            reps.append(r)
+        else:
+            left.append(r.name)
+    left += [c.name for c in verdict.candidates if c.url not in seen]
+    return reps, left
 
 
 def run(workdir: str, relay_factory=Relay) -> int:
@@ -80,19 +79,19 @@ def run(workdir: str, relay_factory=Relay) -> int:
         prof_d = prof_d if isinstance(prof_d, dict) else {}
         profile = _profile(prof_d, job.chat_id)
         verdict = parse_verdict(raw, bundle.duration_s)
-        parts = [format_verdict(verdict, profile, bundle)]
-        urls = [c.url for c in verdict.candidates]
-        trial_raw = (extract_json(raw) or {}).get("trial") if raw else None
-        t = _trial(trial_raw, verdict.candidates, profile)
-        if t:
-            parts.append(t[0])
-            if t[1].url in urls:  # the tried repo gets the Adopt button
-                urls.insert(0, urls.pop(urls.index(t[1].url)))
-        text = "\n\n".join(parts)
-        if len(text) > MAX_REPORT:
-            text = text[:MAX_REPORT - 1] + "…"
-        adopt = adopt_line_for(urls)
-        relay.send(job.chat_id, text, adopt)
+        data = extract_json(raw) if raw else None
+        reps, left = _build(data if isinstance(data, dict) else {}, verdict, _projects(prof_d.get("projects")))
+        tail = "" if reps else "Done. Nothing to install in this one."
+        relay.send(job.chat_id, _reports.format_factcheck(verdict, tail))
+        for i, rep in enumerate(reps):
+            text, line = _reports.format_report(rep)
+            try:
+                relay.send(job.chat_id, text, line, report=True)
+            except RelayError:  # daily budget or relay trouble: stop and say what was left out
+                left = [r.name for r in reps[i:]] + left
+                break
+        if left:
+            relay.send(job.chat_id, _reports.left_out_line(left))
         try:
             prof_d.setdefault("traits", {})
             if isinstance(prof_d["traits"], dict):
@@ -104,7 +103,7 @@ def run(workdir: str, relay_factory=Relay) -> int:
     except Exception as e:  # noqa: BLE001
         print(f"reelay: report failed ({type(e).__name__})")
         try:
-            relay.send(job.chat_id, "Sorry, I couldn't build the report for that video.")
+            relay.send(job.chat_id, "Something broke. Nothing was installed. Try again.")
         except Exception:  # noqa: BLE001
             pass
         return 2

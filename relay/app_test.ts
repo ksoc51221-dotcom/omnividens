@@ -228,9 +228,9 @@ Deno.test("file: streams small, refuses over 20MB, validates id", async () => {
 
 Deno.test("profile: roundtrip, size cap, object only", async () => {
   const t = await setup();
-  assertEq(await (await t.api("/api/profile")).json(), {});
+  assertEq(await (await t.api("/api/profile")).json(), { projects: [] });
   assertEq((await t.api("/api/profile", "PUT", { a: 1 })).status, 200);
-  assertEq(await (await t.api("/api/profile")).json(), { a: 1 });
+  assertEq(await (await t.api("/api/profile")).json(), { a: 1, projects: [] });
   assertEq((await t.api("/api/profile", "PUT", { a: "x".repeat(70000) })).status, 413);
   assertEq((await t.api("/api/profile", "PUT", "[1]")).status, 400);
   assertEq((await t.api("/api/profile", "PUT", "nope")).status, 400);
@@ -271,3 +271,58 @@ function assertEq(a: unknown, b: unknown) {
     throw new Error(`expected ${JSON.stringify(b)}, got ${JSON.stringify(a)}`);
   }
 }
+
+Deno.test("/projects: save, show, clear, caps, no routine fire", async () => {
+  const t = await setup();
+  await t.hook(msg(1, 42, { text: "/projects" }));
+  assertEq(t.sent().at(-1)!.startsWith("No project list yet"), true);
+  await t.hook(msg(2, 42, { text: "/projects\nOpenPlan: my planner\nSpool: screen recorder" }));
+  assertEq(t.sent().at(-1), "Saved 2 projects.");
+  await t.hook(msg(3, 42, { text: "/projects" }));
+  assertEq(t.sent().at(-1), "Your projects (2):\nOpenPlan: my planner\nSpool: screen recorder");
+  assertEq((await (await t.api("/api/profile")).json()).projects, ["OpenPlan: my planner", "Spool: screen recorder"]);
+  await t.hook(msg(4, 42, { text: "/projects " + "x".repeat(201) }));
+  assertEq(t.sent().at(-1)!.startsWith("Not saved"), true);
+  await t.hook(msg(5, 42, { text: "/projects\n" + Array(21).fill("a: b").join("\n") }));
+  assertEq(t.sent().at(-1)!.startsWith("Not saved"), true);
+  assertEq((await (await t.api("/api/profile")).json()).projects.length, 2); // nothing saved on reject
+  await t.hook(msg(6, 42, { text: "/projects clear" }));
+  assertEq((await (await t.api("/api/profile")).json()).projects, []);
+  assertEq(t.calls.filter((c) => c.url === ENV.ROUTINE_FIRE_URL).length, 0);
+  assertEq(t.sent().includes("Got it. Takes a few minutes."), false);
+  t.done();
+});
+
+Deno.test("/projects from a stranger is ignored", async () => {
+  const t = await setup();
+  await t.hook(msg(1, 999, { text: "/projects\nEvil: x" }));
+  assertEq(t.calls.length, 0);
+  assertEq((await (await t.api("/api/profile")).json()).projects, []);
+  t.done();
+});
+
+Deno.test("PUT /api/profile ignores a projects field and keeps the list", async () => {
+  const t = await setup();
+  await t.hook(msg(1, 42, { text: "/projects\nA: b" }));
+  await t.api("/api/profile", "PUT", { vibe: "hype", projects: ["Hacked: yes"] });
+  const got = await (await t.api("/api/profile")).json();
+  assertEq(got.projects, ["A: b"]);
+  assertEq(got.vibe, "hype");
+  t.done();
+});
+
+Deno.test("report sends get their own buttons and obey the daily budget", async () => {
+  const t = await setup({ ...ENV, MAX_REPORTS_PER_DAY: "2" });
+  const line = (r: string) => ({ chat_id: 42, text: "r", adopt_line: `git clone -- https://github.com/o/${r}`, report: true });
+  assertEq((await t.api("/api/send", "POST", line("a"))).status, 200);
+  assertEq((await t.api("/api/send", "POST", line("b"))).status, 200);
+  assertEq((await t.api("/api/send", "POST", line("c"))).status, 429);
+  // two reports -> two different ids, so one tap cannot touch the other
+  const ids = t.calls.filter((c) => c.url.endsWith("/sendMessage")).map((c) =>
+    c.body.reply_markup.inline_keyboard[0][0].callback_data
+  );
+  assertEq(ids, ["adopt:id1", "adopt:id2"]);
+  await t.hook({ update_id: 9, callback_query: { id: "q", from: { id: 42 }, data: "adopt:id2", message: { chat: { id: 42 } } } });
+  assertEq(t.sent().at(-1), "git clone -- https://github.com/o/b");
+  t.done();
+});

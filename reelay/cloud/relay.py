@@ -53,9 +53,12 @@ class Relay:
         except (urllib.error.URLError, OSError, ValueError) as e:
             raise RelayError(f"relay unreachable ({type(e).__name__})") from None
 
-    def send(self, chat_id: int, text: str, adopt_line: str | None = None) -> None:
-        with self._request("POST", "/api/send",
-                           {"chat_id": chat_id, "text": text, "adopt_line": adopt_line}):
+    def send(self, chat_id: int, text: str, adopt_line: str | None = None, report: bool = False) -> None:
+        """`report=True` counts the message against the relay's daily report budget."""
+        body = {"chat_id": chat_id, "text": text, "adopt_line": adopt_line}
+        if report:
+            body["report"] = True
+        with self._request("POST", "/api/send", body):
             pass
 
     def get_file(self, file_id: str, dest: Path) -> Path:
