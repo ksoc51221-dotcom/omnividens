@@ -1,4 +1,4 @@
-# Reelay cloud relay
+# Omnividens cloud relay
 
 A tiny web service that connects your Telegram bot to your Claude Code routine. It runs for free on Deno Deploy, so your Mac does not need to be on.
 

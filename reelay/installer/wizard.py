@@ -79,7 +79,7 @@ class Wizard:
     def run(self) -> int:
         io = self.io
         try:
-            io.say("Welcome to Reelay! This takes about 5 minutes.")
+            io.say("Welcome to Omnividens! This takes about 5 minutes.")
             io.say("You can stop at any time (Ctrl+C) and run  reelay setup  again later.")
             self.step_tools()
             old = self._existing_config()
@@ -145,7 +145,7 @@ class Wizard:
         io.say()
         io.say("  1. Open Telegram and search for  @BotFather  (the one with the blue tick).")
         io.say("  2. Send it the message:  /newbot")
-        io.say("  3. It asks for a name: type anything, like  My Reelay.")
+        io.say("  3. It asks for a name: type anything, like  My Omnividens.")
         io.say("  4. It asks for a username: it must end in 'bot', like  my_reelay_bot.")
         io.say("  5. It replies with a long 'token' (numbers, a colon, then letters).")
         io.say("     Copy it. Treat it like a password.")
@@ -195,7 +195,7 @@ class Wizard:
                 folders.append(path)
             io.say(f"  ✓ Added {path}")
         if not folders:
-            io.say("No folders chosen. Reelay can still watch and fact-check, but won't change any project.")
+            io.say("No folders chosen. Omnividens can still watch and fact-check, but won't change any project.")
         self.updates["allowed_projects"] = folders
 
     def _folder_problem(self, text: str) -> str:
@@ -207,11 +207,11 @@ class Wizard:
     # --- step 4: optional API key -----------------------------------------------------
     def step_api_key(self, old: dict) -> None:
         io = self.io
-        io.screen(4, TOTAL_STEPS, "Optional: let Reelay really test tools")
-        io.say("Reelay can try out tools it finds in videos inside a safe sandbox.")
+        io.screen(4, TOTAL_STEPS, "Optional: let Omnividens really test tools")
+        io.say("Omnividens can try out tools it finds in videos inside a safe sandbox.")
         io.say("That needs an Anthropic API key. WARNING: this costs real money, billed to you per use.")
         io.say("Before you make a key, go to console.anthropic.com > Settings > Limits and set a")
-        io.say("small monthly spend limit (for example $5). Without a key, Reelay only scans, which is free.")
+        io.say("small monthly spend limit (for example $5). Without a key, Omnividens only scans, which is free.")
         if old.get("anthropic_api_key"):
             io.say("(A key is already saved. Press Enter to keep it.)")
         if not io.confirm("Add or replace a key now?", default=False):
@@ -283,21 +283,21 @@ class Wizard:
         """Get the bot running, then wait for the user to press START. True once paired."""
         io, deps = self.io, self.deps
         if deps.service_installed():
-            io.say("Restarting Reelay in the background so it knows the new code...")
+            io.say("Restarting Omnividens in the background so it knows the new code...")
             problem = deps.install_service()
             if problem:
                 io.say(problem)
         else:
-            io.say("Reelay has to be running to answer your bot.")
+            io.say("Omnividens has to be running to answer your bot.")
             io.say("Option A: start it at every login, in the background (stop it any time with  reelay service remove).")
             io.say("Option B: run it now in this window; it stops when you close the window.")
-            if io.confirm("Start Reelay at login (option A)?", default=False):
+            if io.confirm("Start Omnividens at login (option A)?", default=False):
                 problem = deps.install_service()
                 if problem:
                     io.say(problem)
                     io.say("Falling back to option B.")
                     return self._run_in_window()
-                io.say("  ✓ Reelay now starts at login. Remove it any time with:  reelay service remove")
+                io.say("  ✓ Omnividens now starts at login. Remove it any time with:  reelay service remove")
             else:
                 return self._run_in_window()
         return self._wait_for_pairing(before)
@@ -305,8 +305,8 @@ class Wizard:
     def _run_in_window(self) -> bool:
         io = self.io
         io.say()
-        io.say("Starting Reelay. Leave this window open, open the link above and tap START.")
-        io.say("(Press Ctrl+C to stop Reelay. Next time, just type  reelay.)")
+        io.say("Starting Omnividens. Leave this window open, open the link above and tap START.")
+        io.say("(Press Ctrl+C to stop Omnividens. Next time, just type  reelay.)")
         self.deps.run_bot()
         return False
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Idempotent setup for the Reelay routine VM (Ubuntu). Safe to run twice.
+# Idempotent setup for the Omnividens routine VM (Ubuntu). Safe to run twice.
 set -u
 SUDO=""
 if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then SUDO="sudo"; fi

@@ -1,1 +1,1 @@
-"""Cloud routine side of Reelay: `python -m reelay.cloud prepare|report`."""
+"""Cloud routine side of Omnividens: `python -m reelay.cloud prepare|report`."""

@@ -10,7 +10,7 @@ MAX_TRANSCRIPT = 20_000
 MAX_CAPTION = 2_000
 MAX_PROFILE_ITEM = 200
 
-INSTRUCTIONS = """You are Reelay's fact-checker. A user shared a short video. Work out what it \
+INSTRUCTIONS = """You are the Omnividens fact-checker. A user shared a short video. Work out what it \
 shows and says, check its factual claims with web search, and find tools, skills or \
 repos it mentions that are worth trying.
 

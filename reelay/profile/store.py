@@ -1,7 +1,7 @@
 """Local profile store: one private JSON file per user, nothing leaves the machine.
 
 Files live in `reelay_home()/profiles/`. They're readable only by you (0600) and you
-can see (`describe`) or erase (`delete`) everything Reelay knows about you.
+can see (`describe`) or erase (`delete`) everything Omnividens knows about you.
 """
 
 import json

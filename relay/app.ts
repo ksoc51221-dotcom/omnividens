@@ -1,4 +1,4 @@
-// Reelay relay: Telegram webhook <-> cloud routine. Never log tokens, message text or file bytes.
+// Omnividens relay: Telegram webhook <-> cloud routine. Never log tokens, message text or file bytes.
 
 export interface Deps {
   env: (name: string) => string | undefined;
@@ -83,7 +83,7 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
           : "<p>Telegram did not accept the webhook. Check TELEGRAM_BOT_TOKEN.</p>"
       }`;
     return new Response(
-      `<!doctype html><meta charset="utf-8"><title>Reelay relay</title>${body}`,
+      `<!doctype html><meta charset="utf-8"><title>Omnividens relay</title>${body}`,
       { headers: { "content-type": "text/html; charset=utf-8" } },
     );
   }

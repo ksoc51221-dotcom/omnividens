@@ -46,7 +46,7 @@ QUESTIONS = [
     }),
 ]
 GOALS_PROMPT = (
-    "Last one, totally optional: what are you trying to get out of Reelay? "
+    "Last one, totally optional: what are you trying to get out of Omnividens? "
     "(e.g. 'stop falling for fake news', 'find new tools'). "
     "Type it, or tap Skip."
 )
