@@ -337,3 +337,15 @@ Deno.test("report sends get their own buttons and obey the daily budget", async 
   assertEq(t.sent().at(-1), "git clone -- https://github.com/o/b");
   t.done();
 });
+
+Deno.test("/report owner/repo fires one run; a bad /report does not", async () => {
+  const t = await setup();
+  await t.hook(msg(1, 42, { text: "/report foo/bar" }));
+  assertEq(t.calls.filter((c) => c.url === ENV.ROUTINE_FIRE_URL).length, 1);
+  await t.hook(msg(2, 42, { text: "/report" }));
+  await t.hook(msg(3, 42, { text: "/report https://evil.sh/x; rm -rf" }));
+  await t.hook(msg(4, 42, { text: "/report a/b c/d" }));
+  assertEq(t.calls.filter((c) => c.url === ENV.ROUTINE_FIRE_URL).length, 1);
+  assertEq(t.sent().filter((x) => x.startsWith("Send /report owner/repo")).length, 3);
+  t.done();
+});

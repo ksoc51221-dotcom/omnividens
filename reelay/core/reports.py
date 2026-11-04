@@ -7,8 +7,10 @@ is validated here: unknown or missing values fail closed to read-only text with 
 import math
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from reelay.core.types import Verdict
+from reelay.sandbox.safety import find_problem
 
 TYPES = {"skill": "bot skill", "mod": "mod", "app": "full app"}  # fixed list; anything else is "unclear"
 ADOPT_TYPES = {"skill", "mod"}
@@ -61,7 +63,9 @@ class CandidateReport:
     impact: str = NO_FIT
     usage: dict = field(default_factory=dict)  # validated, every number labelled
     examples: list[str] = field(default_factory=list)
-    ran: bool = False
+    ran: bool = False  # the routine never runs anything; always False
+    model_safety: str = "UNSURE"  # what the model said; it can only lower the final verdict
+    claim_matches: bool = False
 
 
 def _strs(v, n: int, limit: int) -> list[str]:
@@ -78,8 +82,7 @@ def _usage(raw) -> dict:
     tok = raw.get("tokens")
     if isinstance(tok, int) and not isinstance(tok, bool) and 0 < tok < 10**9:
         out["tokens"] = tok
-        # `measured` is only believed when the routine says so for a positive count; 0 or missing is never measured
-        out["basis"] = "measured" if raw.get("basis") == "measured" else "estimate"
+        out["basis"] = "estimate"  # nothing in the routine measures real token use yet, so never "measured"
     out["money"] = plain(raw.get("money"), 60) or None
     return out
 
@@ -107,27 +110,83 @@ def parse_report(raw, projects: list[str]) -> CandidateReport | None:
     ident = raw.get("identity") if isinstance(raw.get("identity"), dict) else {}
     parts = repo_parts(url)
     claimed = plain(ident.get("owner_repo"), 140).lower()
-    owner_repo = f"{parts[0]}/{parts[1]}" if parts and claimed == f"{parts[0]}/{parts[1]}".lower() else None
-    name_only = ident.get("name_only") is not False  # missing or odd means "name only": the careful reading
+    owner_repo = f"{parts[0]}/{parts[1]}" if parts else None
+    claim_matches = bool(owner_repo) and claimed == owner_repo.lower()
     safety_in = raw.get("safety") if isinstance(raw.get("safety"), dict) else {}
-    safety = str(safety_in.get("verdict", "")).upper()
-    safety = safety if safety in VERDICTS else "UNSURE"
-    reason = plain(safety_in.get("reason"), 200)
-    ran = raw.get("ran") is True
-    if safety == "YES" and not (owner_repo and not name_only):
-        safety, reason = "UNSURE", "I could not confirm this is the exact repo the video meant."
-    if safety == "UNSURE" and not reason:
-        reason = "I only read the code, I didn't run it."
-    if safety == "NO" and not reason:
-        reason = "The scan found high-risk patterns."
+    model_safety = str(safety_in.get("verdict", "")).upper()
+    model_safety = model_safety if model_safety in VERDICTS else "UNSURE"
+    # The model's words never raise safety, identity or type: apply_gate() decides from real evidence.
+    safety, reason = "UNSURE", plain(safety_in.get("reason"), 200)
     info = raw.get("info") if isinstance(raw.get("info"), dict) else {}
     return CandidateReport(
         name=name, url=url, type=typ, type_note=plain(raw.get("type_note"), 200), safety=safety,
-        safety_reason=reason, owner_repo=owner_repo, name_only=name_only,
+        safety_reason=reason, owner_repo=owner_repo, name_only=True, model_safety=model_safety,
+        claim_matches=claim_matches,
         what=plain(info.get("what"), 400) or "No description was found.", problem=plain(info.get("problem"), 200),
         pros=_strs(info.get("pros"), 2, 160), cons=_strs(info.get("cons"), 2, 160),
         impact=_impact(raw.get("impact"), projects), usage=_usage(raw.get("usage")),
-        examples=_strs(info.get("examples"), 3, 160), ran=ran)
+        examples=_strs(info.get("examples"), 3, 160))
+
+
+def type_evidence(clone: Path) -> set[str]:
+    """Types the files in the clone really support. Never reads file contents."""
+    ev: set[str] = set()
+    try:
+        if (clone / "SKILL.md").is_file() or any(clone.glob("skills/*/SKILL.md")) \
+                or any(clone.glob(".claude/skills/*/SKILL.md")):
+            ev.add("skill")
+        if (clone / ".claude-plugin" / "plugin.json").is_file() or (clone / "hooks").is_dir() \
+                or (clone / "commands").is_dir():
+            ev.add("mod")
+    except OSError:
+        pass
+    return ev
+
+
+def _safe_dir(clone: Path | None) -> bool:
+    return clone is not None and clone.is_dir() and not clone.is_symlink()
+
+
+def apply_gate(rep: CandidateReport, clone: Path | None, confirmed: set[str]) -> CandidateReport:
+    """Decide safety, identity and type from evidence, not from model output.
+
+    `confirmed` is the lowercase owner/repo set the owner or the video itself supplied (links found in the
+    caption, transcript or message, or typed in /report). The result can only be as good as that evidence."""
+    rep.ran = False
+    ok_id = bool(rep.owner_repo) and rep.claim_matches and rep.owner_repo.lower() in confirmed
+    rep.name_only = not ok_id
+    # safety: our own scan of the clone
+    if not _safe_dir(clone):
+        scan, why = "unknown", "I couldn't fetch it to scan it, so I only know what the README claims."
+    else:
+        try:
+            problem = find_problem(clone)
+        except Exception:  # noqa: BLE001 - a scan error is never a pass
+            scan, why = "unknown", "The safety scan could not finish."
+        else:
+            scan, why = ("high", f"The safety scan flagged it: {plain(problem, 140)}.") if problem else \
+                ("clean", "The safety scan found nothing risky in the files.")
+    if scan == "high" or rep.model_safety == "NO":
+        rep.safety = "NO"
+        rep.safety_reason = why if scan == "high" else (rep.safety_reason or "The review found risky behaviour.")
+    elif scan == "clean" and rep.model_safety == "YES" and ok_id:
+        rep.safety, rep.safety_reason = "YES", why
+    else:
+        rep.safety = "UNSURE"
+        if scan == "clean" and not ok_id:
+            rep.safety_reason = "I couldn't confirm this is the exact repo the video meant."
+        elif scan == "clean":
+            rep.safety_reason = rep.safety_reason or "The scan was clean but the review was not sure. I only read the code, I didn't run it."
+        else:
+            rep.safety_reason = why
+    # type: a claimed skill or mod must be backed by files in the clone
+    if rep.type in ADOPT_TYPES:
+        ev = type_evidence(clone) if _safe_dir(clone) else set()
+        if rep.type not in ev:
+            need = "SKILL.md" if rep.type == "skill" else "plugin manifest, hooks/ or commands/"
+            rep.type_note = f"It says it is a {TYPES[rep.type]}, but I found no {need} in its files."
+            rep.type = "unclear"
+    return rep
 
 
 def adopt_line(rep: CandidateReport) -> str | None:
@@ -196,6 +255,13 @@ def format_factcheck(verdict: Verdict, tail: str = "") -> str:
     return text if len(text) <= MAX_TEXT else text[:MAX_TEXT - 1] + "…"
 
 
-def left_out_line(names: list[str]) -> str:
-    shown = ", ".join(plain(n, 40) for n in names[:6]) + ("…" if len(names) > 6 else "")
-    return f"Not reported ({len(names)}): {shown}. Send the video again to get them."
+def repo_label(url, name) -> str:
+    p = repo_parts(url)
+    return f"{p[0]}/{p[1]}" if p else plain(name, 40)
+
+
+def left_out_line(labels: list[str], daily: bool = False) -> str:
+    shown = ", ".join(plain(n, 60) for n in labels[:6]) + ("…" if len(labels) > 6 else "")
+    why = "I hit today's report limit. " if daily else ""
+    return (f"{why}Not reported ({len(labels)}): {shown}. Send /report owner/repo to get one "
+            "(each one starts a new run and uses your Claude usage).")

@@ -119,15 +119,28 @@ def test_github_links():
         "https://github.com/a/b", "https://github.com/c/d"]
 
 
-def _write_report_dir(tmp_path, verdict, relay_job=None):
+def _write_report_dir(tmp_path, verdict, relay_job=None, links="auto", clone_files=("SKILL.md",), owner_supplied=None):
+    """links="auto": every report URL is linked in the video and cloned with `clone_files` under tmp/trial."""
     (tmp_path / "job.json").write_text(relay_job or job("x"))
-    (tmp_path / "bundle.json").write_text(json.dumps(
-        {"frames": [], "transcript": "t", "caption": "", "duration_s": 60}))
+    urls = [r["url"] for r in verdict.get("reports", [])] if isinstance(verdict, dict) else []
+    gl = [u for u in urls if u.startswith("https://github.com/")] if links == "auto" else list(links)
+    bundle = {"frames": [], "transcript": "t", "caption": "", "duration_s": 60, "github_links": gl}
+    if owner_supplied:
+        bundle["owner_supplied"] = owner_supplied
+    (tmp_path / "bundle.json").write_text(json.dumps(bundle))
+    for u in urls:
+        o, r = u.removeprefix("https://github.com/").split("/", 1) if u.startswith("https://github.com/") else (None, None)
+        if o and clone_files is not None and "/" not in r:
+            d = tmp_path / "trial" / f"{o}__{r}"
+            d.mkdir(parents=True, exist_ok=True)
+            for f in clone_files:
+                (d / f).parent.mkdir(parents=True, exist_ok=True)
+                (d / f).write_text("# hi\n")
     (tmp_path / "verdict.json").write_text(json.dumps(verdict) if not isinstance(verdict, str) else verdict)
 
 
 def run_report(relay, tmp_path):
-    return report.run(str(tmp_path), relay_factory=lambda url: relay)
+    return report.run(str(tmp_path), relay_factory=lambda url: relay, trial_root=str(tmp_path / "trial"))
 
 
 def rep(name="bar", url="https://github.com/foo/bar", type="skill", safety="YES", name_only=False, owner_repo=None,
@@ -170,7 +183,7 @@ def test_budget_stops_reports_and_names_the_rest(fake, tmp_path):
     _write_report_dir(tmp_path, verdict_with(*[rep(f"r{i}", f"https://github.com/o/r{i}") for i in range(4)]))
     assert run_report(relay, tmp_path) == 0
     assert len([m for m in relay.sent if m[3]]) == 2
-    assert "Not reported (2): r2, r3" in relay.sent[-1][1]
+    assert "Not reported (2): o/r2, o/r3" in relay.sent[-1][1]
 
 
 def test_over_nine_reports_are_left_out(fake, tmp_path):
@@ -185,7 +198,6 @@ def test_over_nine_reports_are_left_out(fake, tmp_path):
     {k: v for k, v in rep().items() if k != "type"},        # missing type
     rep(type="app", url="https://github.com/o/openproject"),  # app with a valid URL
     rep(safety="UNSURE"),                                   # unsure safety
-    rep(name_only=True),                                    # matched from a name only (unsure identity)
     rep(owner_repo="evil/lookalike"),                       # identity does not match the URL
     rep(safety="NO"),                                       # high-risk scan
     rep(type=["skill"]),                                    # junk type
@@ -202,6 +214,8 @@ def test_mod_gets_adopt_and_types_are_shown(fake, tmp_path):
     relay, _ = fake
     _write_report_dir(tmp_path, verdict_with(rep(type="mod"), rep("app", "https://github.com/o/app", type="app"),
                                              rep("odd", "https://github.com/o/odd", type="zzz", type_note="no README")))
+    (tmp_path / "trial" / "foo__bar" / ".claude-plugin").mkdir()
+    (tmp_path / "trial" / "foo__bar" / ".claude-plugin" / "plugin.json").write_text("{}")
     run_report(relay, tmp_path)
     assert relay.sent[1][2] and "type: mod" in relay.sent[1][1]
     assert "type: full app" in relay.sent[2][1] and relay.sent[2][2] is None
@@ -225,15 +239,14 @@ def test_high_risk_says_no_and_recommends_skip(fake, tmp_path):
     assert "1. Is it safe? NO" in relay.sent[1][1] and "I recommend Skip" in relay.sent[1][1]
 
 
-def test_usage_never_shows_unmeasured_as_measured(fake, tmp_path):
+def test_usage_is_always_an_estimate(fake, tmp_path):
     relay, _ = fake
     r = rep(usage={"tokens": 0, "basis": "measured", "level": "high"})
-    r2 = rep("b", "https://github.com/o/b", usage={"tokens": 5000, "basis": "guess"})
-    r3 = rep("c", "https://github.com/o/c", usage={"tokens": 7000, "basis": "measured"})
-    _write_report_dir(tmp_path, verdict_with(r, r2, r3))
+    r2 = rep("b", "https://github.com/o/b", usage={"tokens": 5000, "basis": "measured"})
+    _write_report_dir(tmp_path, verdict_with(r, r2))
     run_report(relay, tmp_path)
-    assert "measured" not in relay.sent[1][1] and "estimate" in relay.sent[1][1]
-    assert "5,000 tokens (estimate)" in relay.sent[2][1] and "7,000 tokens (measured)" in relay.sent[3][1]
+    assert all("measured" not in m[1] for m in relay.sent)
+    assert "5,000 tokens (estimate)" in relay.sent[2][1]
 
 
 def test_impact_uses_only_listed_projects(fake, tmp_path):
@@ -271,7 +284,7 @@ def test_candidate_without_report_is_listed_as_left_out(fake, tmp_path):
     v = verdict_with(candidates=[{"name": "lonely", "kind": "repo", "url": "https://github.com/q/lonely"}])
     _write_report_dir(tmp_path, v)
     run_report(relay, tmp_path)
-    assert "Not reported (1): lonely" in relay.sent[-1][1]
+    assert "Not reported (1): q/lonely" in relay.sent[-1][1]
 
 
 def test_report_control_chars_and_plain_error(fake, tmp_path):
@@ -319,3 +332,116 @@ def test_local_transcript_never_raises_and_formats(tmp_path):
     assert local_transcript(media, model_factory=broken) == ""
     model = SimpleNamespace(transcribe=lambda path, vad_filter: ([SimpleNamespace(start=65.2, text=" hi ")], None))
     assert local_transcript(media, model_factory=lambda: model) == "[1:05] hi"
+
+
+def sent_reports(relay):
+    return [m for m in relay.sent if m[3]]
+
+
+def test_readme_claims_skill_but_no_skill_file_is_read_only(fake, tmp_path):
+    relay, _ = fake
+    _write_report_dir(tmp_path, verdict_with(rep()), clone_files=("README.md",))
+    run_report(relay, tmp_path)
+    m = sent_reports(relay)[0]
+    assert m[2] is None and "type: unclear" in m[1] and "found no SKILL.md" in m[1]
+
+
+@pytest.mark.parametrize("files", [("hooks/hooks.json",), ("commands/go.md",), (".claude-plugin/plugin.json",)])
+def test_mod_evidence_files(fake, tmp_path, files):
+    relay, _ = fake
+    _write_report_dir(tmp_path, verdict_with(rep(type="mod")), clone_files=files)
+    run_report(relay, tmp_path)
+    assert sent_reports(relay)[0][2] == "git clone -- https://github.com/foo/bar"
+
+
+def test_skill_claim_needs_skill_md_not_mod_files(fake, tmp_path):
+    relay, _ = fake
+    _write_report_dir(tmp_path, verdict_with(rep(type="skill")), clone_files=("hooks/hooks.json",))
+    run_report(relay, tmp_path)
+    assert sent_reports(relay)[0][2] is None
+
+
+def test_model_says_clean_but_our_scan_says_high(fake, tmp_path):
+    relay, _ = fake
+    v = verdict_with(rep(safety="YES"))
+    _write_report_dir(tmp_path, v)
+    (tmp_path / "trial" / "foo__bar" / "evil").symlink_to("/etc/passwd")  # find_problem refuses symlinks
+    run_report(relay, tmp_path)
+    m = sent_reports(relay)[0]
+    assert m[2] is None and "Is it safe? NO" in m[1] and "I recommend Skip" in m[1]
+
+
+def test_model_cannot_raise_a_missing_clone(fake, tmp_path):
+    relay, _ = fake
+    _write_report_dir(tmp_path, verdict_with(rep(safety="YES")), clone_files=None)
+    run_report(relay, tmp_path)
+    m = sent_reports(relay)[0]
+    assert m[2] is None and "Is it safe? UNSURE" in m[1]
+
+
+def test_model_no_lowers_a_clean_scan(fake, tmp_path):
+    relay, _ = fake
+    _write_report_dir(tmp_path, verdict_with(rep(safety="NO")))
+    run_report(relay, tmp_path)
+    assert sent_reports(relay)[0][2] is None
+
+
+def test_identity_must_come_from_the_video_or_the_owner(fake, tmp_path):
+    relay, _ = fake
+    _write_report_dir(tmp_path, verdict_with(rep()), links=[])  # model inferred it from a name
+    run_report(relay, tmp_path)
+    m = sent_reports(relay)[0]
+    assert m[2] is None and "matched from a name only" in m[1] and "UNSURE" in m[1]
+    relay.sent.clear()
+    _write_report_dir(tmp_path, verdict_with(rep()), links=["https://github.com/foo/barn"])  # lookalike link
+    run_report(relay, tmp_path)
+    assert sent_reports(relay)[0][2] is None
+    relay.sent.clear()
+    _write_report_dir(tmp_path, verdict_with(rep()), links=["https://github.com/FOO/Bar"])  # case-insensitive
+    run_report(relay, tmp_path)
+    assert sent_reports(relay)[0][2] == "git clone -- https://github.com/foo/bar"
+
+
+def test_report_command_repo_counts_as_confirmed_and_sends_one_message(fake, tmp_path):
+    relay, _ = fake
+    _write_report_dir(tmp_path, verdict_with(rep(), rep("o", "https://github.com/o/other")), links=[],
+                      owner_supplied=["foo/bar"])
+    run_report(relay, tmp_path)
+    assert len(relay.sent) == 1 and relay.sent[0][2] == "git clone -- https://github.com/foo/bar"
+    assert "Is it safe? YES" in relay.sent[0][1]
+
+
+def test_clones_are_deleted_after_the_report(fake, tmp_path):
+    relay, _ = fake
+    _write_report_dir(tmp_path, verdict_with(rep()))
+    run_report(relay, tmp_path)
+    assert not (tmp_path / "trial" / "foo__bar").exists()
+
+
+def test_daily_cap_names_unsent_and_gives_a_route(fake, tmp_path):
+    relay, _ = fake
+    relay.fail_reports_after = 1
+    _write_report_dir(tmp_path, verdict_with(*[rep(f"r{i}", f"https://github.com/o/r{i}") for i in range(3)]))
+    assert run_report(relay, tmp_path) == 0
+    last = relay.sent[-1][1]
+    assert "today's report limit" in last and "o/r1, o/r2" in last and "/report owner/repo" in last
+    assert "starts a new run" in last
+
+
+def test_left_out_urls_from_the_routine_are_validated(fake, tmp_path):
+    relay, _ = fake
+    v = verdict_with(rep())
+    v["left_out"] = ["https://github.com/a/b", "https://evil.sh/x", "https://github.com/a/b/tree/x", 5]
+    _write_report_dir(tmp_path, v)
+    run_report(relay, tmp_path)
+    assert "Not reported (1): a/b" in relay.sent[-1][1]
+
+
+def test_prepare_report_command(fake, tmp_path):
+    relay, calls = fake
+    assert run_prepare(relay, job("/report Foo/bar.js"), tmp_path) == 0
+    b = json.loads((tmp_path / "bundle.json").read_text())
+    assert b["owner_supplied"] == ["Foo/bar.js"] and b["github_links"] == ["https://github.com/Foo/bar.js"]
+    assert calls == [] and b["frames"] == [] and b["started_at"] > 0  # no video was fetched
+    assert run_prepare(relay, job("/report not a repo"), tmp_path / "x") == 3
+    assert run_prepare(relay, job("/report a/b.git"), tmp_path / "y") == 3

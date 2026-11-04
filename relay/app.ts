@@ -173,6 +173,15 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
       );
     }
 
+    if (!files.length && /^\/report(@\w+)?(\s|$)/.test(text_.trim())) { // one repo, one routine run
+      if (!/^\/report(@\w+)?\s+[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*$/.test(text_.trim())) {
+        return void await say(
+          chat,
+          "Send /report owner/repo, for example /report anthropics/skills",
+        );
+      }
+    }
+
     const hour = Math.floor(deps.now() / 3600000);
     const key = ["rate", hour];
     const max = Number(env("MAX_RUNS_PER_HOUR")) || 20;

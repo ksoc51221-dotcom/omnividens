@@ -3,6 +3,8 @@
 import json
 import mimetypes
 import os
+import re
+import time
 from pathlib import Path
 
 from reelay.cloud.job import Job, first_url, github_links, parse_job
@@ -21,7 +23,7 @@ def _ext(mime) -> str:
     return ext if ext in _EXT_OK else ".mp4"
 
 
-def _bundle_dict(b, caption_text: str, links: list[str]) -> dict:
+def _bundle_dict(b, caption_text: str, links: list[str], started: float = 0.0) -> dict:
     return {
         "source_url": b.source_url,
         "duration_s": b.duration_s,
@@ -30,7 +32,26 @@ def _bundle_dict(b, caption_text: str, links: list[str]) -> dict:
         "caption": b.caption,
         "message_text": caption_text,
         "github_links": links,
+        "started_at": started,
     }
+
+
+_REPORT_CMD = re.compile(r"/report(?:@\w+)?\s+([A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*)\s*")
+
+
+def _repo_only(job: Job, work: Path, relay, started: float) -> int:
+    """`/report owner/repo`: no video; the owner typed the exact repo, which counts as confirmed."""
+    repo = _REPORT_CMD.fullmatch(job.text).group(1)
+    if repo.lower().endswith(".git") or repo.split("/")[1] in (".", ".."):
+        relay.send(job.chat_id, "Send /report owner/repo, for example /report anthropics/skills")
+        return 3
+    data = {"source_url": None, "duration_s": 0, "frames": [], "transcript": "", "caption": "",
+            "message_text": "", "github_links": [f"https://github.com/{repo}"], "owner_supplied": [repo],
+            "started_at": started}
+    (work / "job.json").write_text(json.dumps(job.raw), encoding="utf-8")
+    (work / "bundle.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
+    (work / "profile.json").write_text(json.dumps(relay.get_profile(), ensure_ascii=False), encoding="utf-8")
+    return 0
 
 
 def run(job_text: str, workdir: str, relay_factory=Relay, transcribe=local_transcript) -> int:
@@ -41,8 +62,11 @@ def run(job_text: str, workdir: str, relay_factory=Relay, transcribe=local_trans
         return 2
     relay = relay_factory(job.relay_url)
     work = Path(workdir)
+    started = time.time()
     try:
         work.mkdir(parents=True, exist_ok=True)
+        if _REPORT_CMD.fullmatch(job.text or ""):
+            return _repo_only(job, work, relay, started)
         url = first_url(job.text)
         if not url and not job.file_id:
             relay.send(job.chat_id, NO_LINK_REPLY)
@@ -52,7 +76,7 @@ def run(job_text: str, workdir: str, relay_factory=Relay, transcribe=local_trans
         else:
             source = url
         bundle = load_video(source, work / "video")
-        data = _bundle_dict(bundle, job.text, [])
+        data = _bundle_dict(bundle, job.text, [], started)
         if not data["transcript"]:
             data["transcript"] = transcribe(find_media(work / "video", Path(source) if job.file_id else work / "video"))
         profile = relay.get_profile()

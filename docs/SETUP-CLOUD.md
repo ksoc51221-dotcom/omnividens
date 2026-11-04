@@ -51,6 +51,7 @@ About 15 minutes. Do the steps in order.
    - You should get "Got it. Takes a few minutes." and then one report.
    - If YouTube links fail, send the video file instead.
    - Optional: tell the bot what you build so reports can say where a tool fits. Send `/projects` followed by one `Name: one line` per line (up to 20 lines, 200 characters each). `/projects` alone shows the list, `/projects clear` empties it. It is stored in Deno KV and read by the routine, so never put secrets in it.
+   - Reports left out (more than 9 finds, or the daily limit): send `/report owner/repo` for one. Each one starts a new run and uses your Claude usage. The exact repo you type counts as confirmed.
    - Optional relay env vars: `MAX_REPORTS_PER_DAY` (default 30) caps per-candidate reports a day.
 
 ## If something goes wrong
