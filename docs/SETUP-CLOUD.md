@@ -30,7 +30,14 @@ About 15 minutes. Do the steps in order.
    - Copy the fire URL into the relay variable `ROUTINE_FIRE_URL`.
    - Copy the token into `ROUTINE_TOKEN`. The token is shown only once.
 5. **Routine environment** (claude.ai/code → environment **Default**):
-   - **Setup script:** `bash routine/setup.sh`.
+   - **Setup script:** paste this into the box in the settings page, not into your Terminal. It must not depend on the repo and must exit 0, or every session in this environment fails to start. The routine installs the repo's own package itself when it runs.
+     ```bash
+     #!/bin/bash
+     apt-get update -y || true
+     apt-get install -y ffmpeg || true
+     python3 -m pip install -q -U "yt-dlp[default]" deno faster-whisper || true
+     exit 0
+     ```
    - **Network access → Custom**, keep the defaults checked, and add: your relay host, `api.telegram.org`, `*.tiktok.com`, `*.tiktokcdn.com`, `*.tiktokv.com`, `*.youtube.com`, `*.googlevideo.com`, `*.ytimg.com`, `youtu.be`, `huggingface.co`, `*.hf.co`.
      - If a run says `host_not_allowed`, add the host it names.
      - Switching from Full to Custom also tightens what tools from videos can reach.
