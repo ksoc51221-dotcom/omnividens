@@ -506,12 +506,12 @@ def test_install_script_is_valid_sh_and_safe_by_design():
     assert subprocess.run(["sh", "-n", str(SCRIPT)]).returncode == 0
     text = SCRIPT.read_text()
     assert "sudo" not in text.replace("not with sudo", "")
-    assert "REPLACE-ME" in text  # placeholder until the GitHub repo exists
+    assert "github.com/ksoc51221-dotcom/omnividens" in text
     assert "</dev/tty" in text and "--with-executables-from yt-dlp" in text
 
 
 def test_install_script_refuses_while_repo_is_placeholder():
-    env = {k: v for k, v in os.environ.items() if k != "REELAY_REPO"}
+    env = {**os.environ, "REELAY_REPO": "https://github.com/REPLACE-ME/reelay"}
     result = subprocess.run(["sh", str(SCRIPT)], capture_output=True, text=True, env=env, timeout=30)
     assert result.returncode == 1 and "placeholder" in result.stdout
 

@@ -18,7 +18,8 @@ Spec `docs/SPEC.md` · Architecture `docs/ARCHITECTURE.md` · Board `docs/TASKS.
 
 - `reelay/core/` shared types (`types.py`, orchestrator-only), TOML config (`config.py`, `~/.reelay/config.toml`, override with `REELAY_HOME`), `pipeline.py` wiring
 - `reelay/{bot,router,video,factcheck,sandbox,profile,adapters,installer}/` one owner each
-- `installer/install.sh` one-line installer (URL is a placeholder until the GitHub repo exists)
+- `relay/` Deno relay (Telegram webhook → routine), `routine/` routine prompt + setup, `reelay/cloud/` routine-side prepare/report (spec `docs/CLOUD-SPEC.md`)
+- `installer/install.sh` one-line installer for local mode
 
 ## How work is run
 
@@ -30,7 +31,7 @@ Spec `docs/SPEC.md` · Architecture `docs/ARCHITECTURE.md` · Board `docs/TASKS.
 
 - T1–T9 and T11 merged; 310 tests pass. T10 (second adapter: Codex or Gemini) not started, owner hasn't chosen.
 - Not yet run live: Telegram end-to-end. The owner's school Wi-Fi (Securly) does NOT block `api.telegram.org`: its DNS points it at a Securly proxy that re-signs TLS ("Securly Mitm Certificate") and passes traffic through to Telegram (checked 3 Nov 2026). The interception is DNS-only (school DHCP hands out Securly resolvers; Telegram's real IP serves its genuine GoDaddy cert; MTProto data centers are open), which is why other people's bots can work there. This Mac has no Securly CA installed and the bot trusts only `certifi`, so verification fails; `reelay doctor` reports it. Live test happens on a hotspot or home Wi-Fi unless the owner installs Securly's CA and the bot is taught to use the macOS trust store (owner's call, privacy tradeoff: Securly then sees the bot token and messages).
-- GitHub repo not created yet; README install URL stays a placeholder until it is.
+- 4 Nov: product renamed Omnividens (package/CLI still `reelay`). Main path is now cloud (relay + Claude Code routine, T23); local mode kept. Private repo github.com/ksoc51221-dotcom/omnividens with CI; make public before 7 Nov. Cloud path not run live yet: owner does `docs/SETUP-CLOUD.md`.
 
 ## Hard rules
 
