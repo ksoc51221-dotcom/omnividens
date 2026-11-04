@@ -280,7 +280,10 @@ Deno.test("/projects: save, show, clear, caps, no routine fire", async () => {
   assertEq(t.sent().at(-1), "Saved 2 projects.");
   await t.hook(msg(3, 42, { text: "/projects" }));
   assertEq(t.sent().at(-1), "Your projects (2):\nOpenPlan: my planner\nSpool: screen recorder");
-  assertEq((await (await t.api("/api/profile")).json()).projects, ["OpenPlan: my planner", "Spool: screen recorder"]);
+  assertEq((await (await t.api("/api/profile")).json()).projects, [
+    "OpenPlan: my planner",
+    "Spool: screen recorder",
+  ]);
   await t.hook(msg(4, 42, { text: "/projects " + "x".repeat(201) }));
   assertEq(t.sent().at(-1)!.startsWith("Not saved"), true);
   await t.hook(msg(5, 42, { text: "/projects\n" + Array(21).fill("a: b").join("\n") }));
@@ -313,7 +316,12 @@ Deno.test("PUT /api/profile ignores a projects field and keeps the list", async 
 
 Deno.test("report sends get their own buttons and obey the daily budget", async () => {
   const t = await setup({ ...ENV, MAX_REPORTS_PER_DAY: "2" });
-  const line = (r: string) => ({ chat_id: 42, text: "r", adopt_line: `git clone -- https://github.com/o/${r}`, report: true });
+  const line = (r: string) => ({
+    chat_id: 42,
+    text: "r",
+    adopt_line: `git clone -- https://github.com/o/${r}`,
+    report: true,
+  });
   assertEq((await t.api("/api/send", "POST", line("a"))).status, 200);
   assertEq((await t.api("/api/send", "POST", line("b"))).status, 200);
   assertEq((await t.api("/api/send", "POST", line("c"))).status, 429);
@@ -322,7 +330,10 @@ Deno.test("report sends get their own buttons and obey the daily budget", async 
     c.body.reply_markup.inline_keyboard[0][0].callback_data
   );
   assertEq(ids, ["adopt:id1", "adopt:id2"]);
-  await t.hook({ update_id: 9, callback_query: { id: "q", from: { id: 42 }, data: "adopt:id2", message: { chat: { id: 42 } } } });
+  await t.hook({
+    update_id: 9,
+    callback_query: { id: "q", from: { id: 42 }, data: "adopt:id2", message: { chat: { id: 42 } } },
+  });
   assertEq(t.sent().at(-1), "git clone -- https://github.com/o/b");
   t.done();
 });

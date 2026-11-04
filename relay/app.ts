@@ -167,7 +167,10 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
     const text_: string = String(msg.text ?? msg.caption ?? "");
     if (!text_ && !files.length) return;
     if (!files.length && /^\/projects(@\w+)?(\s|$)/.test(text_.trim())) {
-      return void await projectsCommand(chat, text_.trim().replace(/^\/projects(@\w+)?/, "").trim());
+      return void await projectsCommand(
+        chat,
+        text_.trim().replace(/^\/projects(@\w+)?/, "").trim(),
+      );
     }
 
     const hour = Math.floor(deps.now() / 3600000);
@@ -243,7 +246,9 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
           const cur = await kv.get<number>(["reports", day]);
           const n = cur.value ?? 0;
           if (n >= max) return json({ error: "daily report limit" }, 429);
-          const res = await kv.atomic().check(cur).set(["reports", day], n + 1, { expireIn: 2 * DAY })
+          const res = await kv.atomic().check(cur).set(["reports", day], n + 1, {
+            expireIn: 2 * DAY,
+          })
             .commit();
           if (res.ok) break;
         }
