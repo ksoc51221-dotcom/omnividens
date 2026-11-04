@@ -41,7 +41,7 @@ About 15 minutes. Do the steps in order.
    - **Network access → Custom**, keep the defaults checked, and add: your relay host, `api.telegram.org`, `*.tiktok.com`, `*.tiktokcdn.com`, `*.tiktokv.com`, `*.youtube.com`, `*.googlevideo.com`, `*.ytimg.com`, `youtu.be`, `huggingface.co`, `*.hf.co`.
      - If a run says `host_not_allowed`, add the host it names.
      - Switching from Full to Custom also tightens what tools from videos can reach.
-   - **Network secret:** host = your relay host, header `Authorization`, value `Bearer ` + your `RELAY_SECRET`.
+   - **Network secret:** type **Bearer**, allowed website = your relay host, header name `Authorization`, prefix `Bearer`, value = your `RELAY_SECRET` alone. Leave path prefixes empty.
 6. **Connect.**
    - Stop any local copy of the bot first (`reelay service remove`, and quit any `reelay run`). One bot token can't do both.
    - Open your relay's production URL in a browser. It should say "Not connected yet", with only `OWNER_TELEGRAM_ID` missing. If other names are listed, trigger a new build so the variables load.
