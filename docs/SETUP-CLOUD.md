@@ -15,15 +15,17 @@ About 15 minutes. Do the steps in order.
    openssl rand -hex 32
    ```
    The first one is `WEBHOOK_SECRET`, the second one is `RELAY_SECRET`.
-2. **Deploy the relay.**
-   - Go to dash.deno.com and click **Sign in with GitHub**.
-   - Click **New Project**, pick the repo from step A, and set the entrypoint to `relay/main.ts`.
-   - Copy the URL it gives you (`https://….deno.dev`).
-   - Check that KV is available on your plan; see `relay/README.md`.
-3. **Relay settings** (Deno Deploy → your project → Settings → Environment Variables):
+2. **Deploy the relay.** (Deno moved: the old dash.deno.com is gone.)
+   - Go to console.deno.com, sign in with GitHub, and create an organization.
+   - Click **+ New App** and pick the `omnividens` repo. If it isn't listed, use **Configure GitHub App permissions** to grant access.
+   - Click **Edit build config**: Framework preset **No Preset**, leave Install and Build empty, Runtime **Dynamic**, Entrypoint `relay/main.ts`.
+   - Click **Create App**. The first build may fail at Warm up because there is no database yet. That's fine.
+   - Go to the organization's **Databases** → **Provision Database** → **Deno KV**, name it, save. Click **Assign** and pick your app. Wait for "Connected". Then restart the build.
+   - Copy the app's production URL (`https://….deno.net`). Not the preview URL.
+3. **Relay settings** (your app → Settings → Environment Variables). Add each as a **Secret**, with the Production and Development contexts on:
    - `TELEGRAM_BOT_TOKEN`: from @BotFather.
    - `WEBHOOK_SECRET` and `RELAY_SECRET`: from step 1.
-   - Leave `OWNER_TELEGRAM_ID` empty for now.
+   - Leave `OWNER_TELEGRAM_ID` out for now.
 4. **Routine trigger.** Open the routine Claude made (claude.ai/code/routines), then **Add trigger → API**.
    - Copy the fire URL into the relay variable `ROUTINE_FIRE_URL`.
    - Copy the token into `ROUTINE_TOKEN`. The token is shown only once.
@@ -34,9 +36,10 @@ About 15 minutes. Do the steps in order.
      - Switching from Full to Custom also tightens what tools from videos can reach.
    - **Network secret:** host = your relay host, header `Authorization`, value `Bearer ` + your `RELAY_SECRET`.
 6. **Connect.**
-   - Open your relay URL in a browser and check that it says "Connected".
+   - Stop any local copy of the bot first (`reelay service remove`, and quit any `reelay run`). One bot token can't do both.
+   - Open your relay's production URL in a browser. It should say "Not connected yet", with only `OWNER_TELEGRAM_ID` missing. If other names are listed, trigger a new build so the variables load.
    - Send `/start` to your bot. It replies "Your Telegram ID is N".
-   - Put N into `OWNER_TELEGRAM_ID` and save.
+   - Put N into `OWNER_TELEGRAM_ID`, save, and reload the page until it says "Connected ✓".
 7. **Test.** Share a TikTok link with the bot.
    - You should get "Got it. Takes a few minutes." and then one report.
    - If YouTube links fail, send the video file instead.
