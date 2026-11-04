@@ -7,6 +7,8 @@ can see (`describe`) or erase (`delete`) everything Omnividens knows about you.
 import json
 import os
 import re
+import tempfile
+import threading
 from dataclasses import asdict
 from pathlib import Path
 
@@ -16,6 +18,9 @@ from reelay.core.types import Profile
 VIBES = ("chill", "balanced", "hype")
 MAX_GOALS, MAX_GOAL_LEN = 5, 300
 MAX_TRAITS, MAX_TRAIT_LEN = 20, 100
+
+
+_SAVE_LOCK = threading.Lock()
 
 
 def profiles_dir() -> Path:
@@ -35,12 +40,16 @@ def save(profile: Profile) -> None:
     folder.mkdir(parents=True, exist_ok=True)
     os.chmod(folder, 0o700)
     path = _path(profile.user_id)
-    tmp = path.with_suffix(".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(asdict(profile), f, indent=2, ensure_ascii=False)
-    os.chmod(tmp, 0o600)
-    tmp.replace(path)  # atomic: never a half-written profile
+    with _SAVE_LOCK:
+        fd, tmp_name = tempfile.mkstemp(dir=folder, prefix=path.stem + ".", suffix=".tmp")  # unique, 0600
+        tmp = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(asdict(profile), f, indent=2, ensure_ascii=False)
+            tmp.replace(path)  # atomic: never a half-written profile
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
 
 
 def load(user_id: str) -> Profile | None:

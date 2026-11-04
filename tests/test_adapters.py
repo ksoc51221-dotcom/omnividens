@@ -193,3 +193,9 @@ def test_registry_lists_only_installed(monkeypatch):
     monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/claude")
     found = available_adapters()
     assert [a.name for a in found] == ["claude-code"] and isinstance(found[0], Adapter)
+
+
+def test_t22_bad_timeout_is_a_refusal_not_a_crash(tmp_path):
+    a, proj = make(tmp_path, timeout_s="soon")
+    r = a.run(Instruction("x", project=proj))
+    assert not r.ok and r.error.startswith("refused")

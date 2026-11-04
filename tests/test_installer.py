@@ -506,12 +506,12 @@ def test_install_script_is_valid_sh_and_safe_by_design():
     assert subprocess.run(["sh", "-n", str(SCRIPT)]).returncode == 0
     text = SCRIPT.read_text()
     assert "sudo" not in text.replace("not with sudo", "")
-    assert "REPLACE-ME" in text  # placeholder until the GitHub repo exists
+    assert "github.com/ksoc51221-dotcom/omnividens" in text
     assert "</dev/tty" in text and "--with-executables-from yt-dlp" in text
 
 
 def test_install_script_refuses_while_repo_is_placeholder():
-    env = {k: v for k, v in os.environ.items() if k != "REELAY_REPO"}
+    env = {**os.environ, "REELAY_REPO": "https://github.com/REPLACE-ME/reelay"}
     result = subprocess.run(["sh", str(SCRIPT)], capture_output=True, text=True, env=env, timeout=30)
     assert result.returncode == 1 and "placeholder" in result.stdout
 
@@ -803,3 +803,32 @@ def test_corrupt_paired_json_gives_one_clear_line_in_doctor_and_wizard(home):
     user = FakeUser(["", TOKEN, "", "n", "y"])
     Wizard(user.console(), make_deps(home, paired_count=boom)).run()
     assert "paired.json is corrupt" in user.screen and "Traceback" not in user.screen
+
+
+# ---------- T22 bug sweep ----------
+
+def test_t22_offline_with_service_says_to_reinstall_it(home):
+    deps = make_deps(home, check_network=lambda: Check("Telegram", False, "no network"),
+                     service_installed=lambda: True)
+    user = FakeUser([])
+    assert Wizard(user.console(), deps).step_pair("bot") is False
+    assert "reelay service install" in user.screen
+
+
+def test_t22_already_paired_skips_code_and_wait(home):
+    deps = make_deps(home, paired_count=lambda: 1, make_code=lambda: pytest.fail("no code needed"))
+    user = FakeUser([])
+    assert Wizard(user.console(), deps).step_pair("bot") is True
+    assert "already paired" in user.screen and "expired" not in user.screen
+
+
+def test_t22_bootstrap_retried_once_after_bootout(home):
+    calls, slept = [], []
+    results = iter([0, 5, 0])  # bootout, bootstrap fails, retry works
+
+    def run(argv):
+        calls.append(argv[1])
+        return subprocess.CompletedProcess(argv, next(results), "", "")
+
+    assert service.install(run=run, home=home, command=["x"], path_env="", sleep=slept.append) == ""
+    assert calls == ["bootout", "bootstrap", "bootstrap"] and slept == [1]

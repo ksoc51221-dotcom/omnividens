@@ -14,7 +14,7 @@ HELP = """Omnividens: share a video to your Telegram bot; your AI watches and fa
   reelay pair             show a new pairing code and QR code for another phone
   reelay service install  start Omnividens automatically when you log in
   reelay service remove   stop that and delete it
-  reelay                  run the bot now (same as: reelay run)
+  reelay                  run the bot now (same as: reelay run); add --debug for full error details
 """
 
 

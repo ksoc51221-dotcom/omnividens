@@ -1,4 +1,4 @@
-# Reelay — Spec (v0.1, draft for owner approval)
+# Omnividens — Spec (v0.1, draft for owner approval)
 
 **Deadline:** 7 November 2026. Judged: 50% 10-min video, 40% GitHub repo, 10% surprise.
 
@@ -6,7 +6,7 @@
 Share any short video to a Telegram bot; it watches it, fact-checks it against who you are, and safely tries anything useful in a sandbox before your AI tool adopts it.
 
 ## Core flow (the demo moment)
-1. User taps Share on a Reel / TikTok / Short / X video → sends to their Reelay bot.
+1. User taps Share on a Reel / TikTok / Short / X video → sends to their Omnividens bot.
 2. Bot downloads it, samples frames + transcript, and Claude "watches" it.
 3. Claims are fact-checked; the result is personalised to the user's profile.
 4. If it contains a tool/skill/feature: it is scanned and tried in a **sandbox**.

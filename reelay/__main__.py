@@ -93,10 +93,23 @@ def scrub_token(text: str) -> str:
     return _TOKEN_RE.sub("<token>", text)
 
 
+class TokenScrubFilter(logging.Filter):
+    """Keeps a bot token out of log records (python-telegram-bot logs InvalidToken, whose text
+    holds the whole token, before our own message is printed). Scrubs the message and traceback."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = scrub_token(record.getMessage())
+        record.args = None
+        if record.exc_info:
+            record.exc_text = scrub_token("".join(traceback.format_exception(*record.exc_info)))
+            record.exc_info = None
+        return True
+
+
 def make_error_handler(debug: bool = False, clock=time.monotonic, out=print):
     """An Application error handler: one friendly line at most every ~60 s instead of a traceback
     on every polling retry. The full traceback (token scrubbed) shows only with --debug."""
-    last = [None]
+    last: dict[type, float] = {}  # per error type, so one kind never hides another
 
     async def on_error(update, context) -> None:
         error = context.error
@@ -105,12 +118,16 @@ def make_error_handler(debug: bool = False, clock=time.monotonic, out=print):
             out(scrub_token(text))
             return
         now = clock()
-        if last[0] is not None and now - last[0] < ERROR_LINE_EVERY:
+        if type(error) in last and now - last[type(error)] < ERROR_LINE_EVERY:
             return
-        last[0] = now
-        from telegram.error import NetworkError
+        last[type(error)] = now
+        from telegram.error import Conflict, InvalidToken, NetworkError
 
-        if isinstance(error, NetworkError):
+        if isinstance(error, InvalidToken):
+            out(TOKEN_HELP)
+        elif isinstance(error, Conflict):
+            out(CONFLICT_HELP)
+        elif isinstance(error, NetworkError):
             out(explain_network_error(error) + RETRY_NOTE)
         else:
             out(f"Something went wrong ({type(error).__name__}). Run with --debug for details.")
@@ -143,6 +160,10 @@ def main(argv: list[str] | None = None) -> int:
     logging.getLogger("reelay").setLevel(logging.INFO)
     # httpx logs full URLs at INFO and those contain the bot token: never lower this.
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    if "--debug" not in argv:
+        # Handlers, not loggers: a filter on a logger skips records from its child loggers.
+        for handler in logging.getLogger().handlers:
+            handler.addFilter(TokenScrubFilter())
     try:
         from reelay.bot import Pairing
         from reelay.bot.config import get_bot_token

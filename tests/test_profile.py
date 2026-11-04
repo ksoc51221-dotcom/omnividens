@@ -188,3 +188,12 @@ def test_describe_is_honest_about_claude_and_forget_removes_tmp(home):
     tmp = home / "profiles" / "1.tmp"
     tmp.write_text("x")
     assert delete("1") and not tmp.exists()
+
+
+def test_t22_save_uses_unique_temp_files_and_leaves_none(home):
+    import threading
+    ts = [threading.Thread(target=lambda i=i: save(Profile("1", goals=[str(i)]))) for i in range(8)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert load("1") is not None
+    assert [p.name for p in store.profiles_dir().iterdir()] == ["1.json"]

@@ -211,3 +211,28 @@ def test_corrupt_paired_json_is_one_clear_error(tmp_path):
     p.write_text("{not json")
     with pytest.raises(ConfigError, match="corrupt"):
         Pairing(p)
+
+
+def test_t22_pairing_reloads_codes_written_by_another_process(tmp_path):
+    path = tmp_path / "paired.json"
+    running = Pairing(path)
+    code = Pairing(path).new_code()  # e.g. `reelay pair` in another terminal
+    assert running.try_pair("7", code) and running.is_paired("7")
+    Pairing(path).new_code()  # another new code must not erase the user
+    assert Pairing(path).is_paired("7") and running.is_paired("7")
+
+
+def test_t22_failed_download_removes_temp_dir(setup):
+    bot = paired(setup)
+    made = []
+
+    class Bad(FakeAttachment):
+        async def get_file(self):
+            class F:
+                async def download_to_drive(self, path):
+                    made.append(path.parent)
+                    raise OSError("boom")
+            return F()
+
+    asyncio.run(handle_update(bot, fake_update("1", video=Bad())))
+    assert made and not made[0].exists()

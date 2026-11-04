@@ -254,9 +254,14 @@ class Wizard:
             io.say(f"✗ {net.fix}")
             io.say("Your settings are saved. Once Telegram is reachable, type  reelay  to start the bot,")
             io.say("and  reelay pair  for a pairing code.")
+            if deps.service_installed():
+                io.say("The background service still holds your old token, so also run  reelay service install  once Telegram is reachable.")
             return False
         try:
             before = deps.paired_count()
+            if before > 0:
+                io.say("You're already paired. Just message your bot.")
+                return True
             code = deps.make_code()
         except ConfigError as e:
             io.say(str(e))

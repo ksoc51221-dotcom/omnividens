@@ -1,7 +1,7 @@
 #!/bin/sh
 # Omnividens installer for macOS. Needs no admin password. Run it with:
 #
-#   curl -fsSL https://raw.githubusercontent.com/REPLACE-ME/reelay/main/installer/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/ksoc51221-dotcom/omnividens/main/installer/install.sh | sh
 #
 # What it does, in order (nothing else):
 #   1. installs `uv` (a Python tool manager) into ~/.local/bin if you don't have it
@@ -12,7 +12,7 @@
 
 set -eu
 
-REELAY_REPO="${REELAY_REPO:-https://github.com/REPLACE-ME/reelay}"
+REELAY_REPO="${REELAY_REPO:-https://github.com/ksoc51221-dotcom/omnividens}"
 REELAY_REF="${REELAY_REF:-main}"
 UV_INSTALLER="https://astral.sh/uv/install.sh"
 
