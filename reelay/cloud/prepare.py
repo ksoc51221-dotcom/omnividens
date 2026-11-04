@@ -62,6 +62,7 @@ def run(job_text: str, workdir: str, relay_factory=Relay, transcribe=local_trans
         (work / "profile.json").write_text(json.dumps(profile, ensure_ascii=False), encoding="utf-8")
         return 0
     except VideoError as e:
+        print(f"reelay: {type(e).__name__}: {' '.join(str(e).split())[:300]}")
         return _fail(relay, job, e.user_message)
     except RelayError as e:
         print(f"reelay: {e}")

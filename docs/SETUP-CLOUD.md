@@ -35,10 +35,10 @@ About 15 minutes. Do the steps in order.
      #!/bin/bash
      apt-get update -y || true
      apt-get install -y ffmpeg || true
-     python3 -m pip install -q -U "yt-dlp[default]" deno faster-whisper || true
+     python3 -m pip install -q -U "yt-dlp[default,curl-cffi]" deno faster-whisper || true
      exit 0
      ```
-   - **Network access → Custom**, keep the defaults checked, and add: your relay host, `api.telegram.org`, `*.tiktok.com`, `*.tiktokcdn.com`, `*.tiktokv.com`, `*.youtube.com`, `*.googlevideo.com`, `*.ytimg.com`, `youtu.be`, `huggingface.co`, `*.hf.co`.
+   - **Network access → Custom**, keep the defaults checked, and add: your relay host, `api.telegram.org`, `*.tiktok.com`, `*.tiktokcdn.com`, `*.tiktokv.com`, `*.tiktokcdn-us.com`, `*.tiktokcdn-eu.com`, `*.youtube.com`, `*.googlevideo.com`, `*.ytimg.com`, `youtu.be`, `huggingface.co`, `*.hf.co`.
      - If a run says `host_not_allowed`, add the host it names.
      - Switching from Full to Custom also tightens what tools from videos can reach.
    - **Network secret:** type **Bearer**, allowed website = your relay host, header name `Authorization`, prefix `Bearer`, value = your `RELAY_SECRET` alone. Leave path prefixes empty.

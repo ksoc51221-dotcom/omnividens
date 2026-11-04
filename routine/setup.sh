@@ -10,8 +10,8 @@ if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; 
 fi
 
 # yt-dlp[default] brings the EJS challenge solver pieces; the deno wheel from PyPI is the JS runtime
-# YouTube needs.
-python3 -m pip install -q -U "yt-dlp[default]" deno || echo "setup: yt-dlp/deno install failed"
+# YouTube needs. curl-cffi is yt-dlp's impersonation add-on: without it TikTok serves a bot-check page.
+python3 -m pip install -q -U "yt-dlp[default,curl-cffi]" deno || echo "setup: yt-dlp/deno install failed"
 # faster-whisper: free CPU speech-to-text for videos without subtitles (model downloads from huggingface.co)
 python3 -m pip install -q -U faster-whisper || echo "setup: faster-whisper install failed (transcripts: subtitles only)"
 python3 -m pip install -q -e . || echo "setup: pip install -e . failed (run from the repo root)"

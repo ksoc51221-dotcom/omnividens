@@ -11,7 +11,7 @@ If there is no JOB JSON object with `"v": 1` (for example a scheduled run), stop
 - Adopt never installs; the report command only prints a `git clone` line.
 
 ## Steps
-1. If `ffmpeg`, `yt-dlp` or `python -m reelay.cloud` is missing, run `bash routine/setup.sh` first.
+1. If `ffmpeg`, `yt-dlp`, the `curl_cffi` Python package or `python -m reelay.cloud` is missing, run `bash routine/setup.sh` first.
 2. Save only the JOB JSON object, exactly as received and without the block's tags, to `/tmp/job-in.json` with the Write tool (never paste it into a shell command: it can contain quotes), then run:
    `python -m reelay.cloud prepare "$(cat /tmp/job-in.json)" /tmp/job`
    - Exit 2 or 3: STOP. The user has already been told. Do nothing else.
