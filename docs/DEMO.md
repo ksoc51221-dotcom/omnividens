@@ -10,7 +10,7 @@ Judging: this video is 50% of the grade and is technical. Show that every safety
 
 ## Before you record
 - [ ] **Pick the video in advance**: a TikTok or Instagram reel that names GitHub repos (ideally one skill/mod and one full app, to show both rules). **Run it once end to end beforehand** so you know it works and your Claude usage isn't used up (routine runs come out of your plan).
-- [ ] Your own Telegram connection works on the recording network (send `/start`; the relay status page says Connected ✓). School Wi-Fi blocks Telegram, so record from a network where it works.
+- [ ] Confirm the bot responds on your recording network (send `/start`).
 - [ ] **Nothing secret on screen**: no Deno Deploy environment page, no `~/.reelay/config.toml`, no routine settings with tokens, no terminal history with keys. Close those tabs.
 - [ ] Set `/goals` and `/projects` once, so the fit line has something to match.
 - [ ] **Record a backup take** of the whole live segment (minutes 2–6) and keep it.
@@ -21,7 +21,7 @@ Judging: this video is 50% of the grade and is technical. Show that every safety
 | Min | Show | Say / point out | Tag |
 |---|---|---|---|
 | 0:00–0:45 | Title, one-line pitch | "I save tools from Reels and never check them. Trying a random repo on my laptop is risky. So Omnividens does it in the cloud and only recommends." | |
-| 0:45–2:00 | **Architecture** (README Mermaid diagram) | Telegram → **relay** (Deno Deploy, only thing that talks to Telegram; checks my Telegram ID; strangers are dropped silently; rate-capped) → **routine** (Claude Code, a fresh disposable VM per video) → report back through the relay. The bot token stays in the relay; the routine only has a relay secret the cloud proxy injects. Why cloud: school Wi-Fi re-signs Telegram's TLS, and I chose not to weaken certificate checks. | |
+| 0:45–2:00 | **Architecture** (README Mermaid diagram) | Telegram → **relay** (Deno Deploy, only thing that talks to Telegram; checks my Telegram ID; strangers are dropped silently; rate-capped) → **routine** (Claude Code, a fresh disposable VM per video) → report back through the relay. The bot token stays in the relay; the routine only has a relay secret the cloud proxy injects. Why cloud: the laptop can be closed, and no network filter or certificate check has to be worked around. | |
 | 2:00–3:00 | **Share the video** to the bot | Reply "Got it. Takes a few minutes." Show the relay accepted it (Telegram only; not the Deno page). Say: video text is data, never instructions. | ✅ |
 | 3:00–4:15 | **While it runs**: show what the routine does (`routine/PROMPT.md`, hard rules first) | Download (yt-dlp), frames, transcript, web-searched fact-check, then repos cloned **for reading only**: nothing is installed or run. Don't invent timings: the Instagram run took 109 s in total for an 84 s video. | ✅ |
 | 4:15–5:15 | **Fact-check message** | Summary in my vibe, claims with timestamps and **sources cited** (not "verified"). If using the new format: the receipt "Saw: N of 30 frames" says how many frames Claude really looked at. | ✅ (old format) / ⚠️ (receipt) |
@@ -39,7 +39,7 @@ Show the **model being overruled**: in the offline segment, edit the test fixtur
 ## Backup plan
 | If this fails | Do this |
 |---|---|
-| Telegram blocked on the network | Switch to a network where it works; as a last resort play the backup take for minutes 2–6 and say so. |
+| Bot doesn't respond on the network | Switch to a network where it works; as a last resort play the backup take for minutes 2–6 and say so. |
 | Routine run is slow or errors | Cut to the backup take. Never wait on camera. |
 | Usage limit hit | Play the backup take; run the offline segment live. |
 | New report format misbehaves | Show only what ran live (one fact-check, one report) and run the new behaviour through the tests instead. |
