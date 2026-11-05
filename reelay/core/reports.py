@@ -327,7 +327,7 @@ def format_report(rep: CandidateReport) -> tuple[str, str | None]:
     return (text if len(text) <= MAX_TEXT else text[:MAX_TEXT - 1] + "…"), line
 
 
-def format_factcheck(verdict: Verdict, tail: str = "") -> str:
+def format_factcheck(verdict: Verdict, tail: str = "", saw: str = "") -> str:
     """The short, separate fact-check message."""
     lines = [plain(verdict.summary, 400) or "No summary."]
     if verdict.claims:
@@ -335,6 +335,8 @@ def format_factcheck(verdict: Verdict, tail: str = "") -> str:
         for c in verdict.claims[:6]:
             lines.append(f"{_ICONS.get(c.verdict, '❔')} {plain(c.text, 140)} ({c.verdict})")
         lines.append("Sources are what the AI cited, not proof.")
+    if saw:
+        lines += ["", plain(saw, 120)]
     if tail:
         lines += ["", tail]
     text = "\n".join(lines)

@@ -15,12 +15,15 @@ const MAX_FILE = 20 * 1024 * 1024;
 const MAX_PROFILE = 64 * 1024;
 const MAX_PROJECT_LINES = 20;
 const MAX_PROJECT_LINE = 200;
+const MAX_GOAL_LINES = 5;
+const MAX_GOAL_LINE = 300;
 const DAY = 24 * 3600 * 1000;
 const MAC_ONLINE_MS = 3 * 60 * 1000;
 const LEASE_MS = 15 * 60 * 1000;
 const MAC_MAX_ATTEMPTS = 2;
+const MAC_MAX_PENDING = 5;
 const MAC_JOB_TTL = DAY; // after this the user is told and the job dropped
-const MAC_KV_TTL = 2 * DAY; // KV entry outlives the logical expiry so a sweep can still tell the user
+const MAC_KV_TTL = 7 * DAY; // KV entry outlives the logical expiry so a sweep can still tell the user
 const MAX_FRAMES = 20;
 const MAX_FRAME_BYTES = 50_000; // a Deno KV value maxes out at 64 KiB
 const MAX_TRANSCRIPT = 24_000; // chars; meta stays under 64 KiB even at 2 bytes a char
@@ -217,11 +220,40 @@ export function makeHandler(deps: Deps): Handler {
     return code;
   }
 
+  // Owner's goals: same pattern as /projects, own key, so a profile write by the routine can't erase them.
+  async function goalsCommand(chat: number, arg: string) {
+    const cur = (await kv.get<string[]>(["goals"])).value ?? [];
+    if (!arg) {
+      return void await say(
+        chat,
+        cur.length
+          ? `Your goals (${cur.length}):\n${cur.join("\n")}`
+          : "No goals yet. Send /goals followed by up to 5 lines, one goal per line.",
+      );
+    }
+    if (arg.toLowerCase() === "clear") {
+      await kv.delete(["goals"]);
+      return void await say(chat, "Goals cleared.");
+    }
+    const lines = arg.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    if (lines.length > MAX_GOAL_LINES || lines.some((l) => l.length > MAX_GOAL_LINE)) {
+      return void await say(
+        chat,
+        `Not saved: at most ${MAX_GOAL_LINES} lines, ${MAX_GOAL_LINE} characters each.`,
+      );
+    }
+    await kv.set(["goals"], lines);
+    await say(chat, `Saved ${lines.length} goal${lines.length === 1 ? "" : "s"}.`);
+  }
+
   async function ownerMessage(msg: Json, updateId: number, origin: string) {
     const chat: number = msg.chat.id;
     const files = [msg.video, msg.document, msg.animation].filter((f) => f?.file_id);
     const text_: string = String(msg.text ?? msg.caption ?? "");
     if (!text_ && !files.length) return;
+    if (!files.length && /^\/goals(@\w+)?(\s|$)/.test(text_.trim())) {
+      return void await goalsCommand(chat, text_.trim().replace(/^\/goals(@\w+)?/, "").trim());
+    }
     if (!files.length && /^\/projects(@\w+)?(\s|$)/.test(text_.trim())) {
       return void await projectsCommand(
         chat,
@@ -290,9 +322,18 @@ export function makeHandler(deps: Deps): Handler {
     return (await kv.get<number>(["mac", "seen"])).value;
   }
 
-  // Fire the routine for a job whose bundle is stored. Told-the-user either way; returns true if the job is finished.
-  async function fireReady(rec: MacJob): Promise<boolean> {
-    if (!(await takeRateSlot())) return false; // keep it; the next sweep tries again
+  // Fire the routine for a job whose bundle is stored. The row is claimed first (check-and-delete),
+  // so a webhook or poll sweeping at the same moment cannot fire it a second time.
+  async function fireReady(entry: Deno.KvEntry<MacJob>): Promise<boolean> {
+    const rec = entry.value;
+    const claim = await kv.atomic().check(entry).delete(entry.key).commit();
+    if (!claim.ok) return true; // someone else has it
+    if (!(await takeRateSlot())) {
+      // hourly cap is full: put it back (unless it was re-created meanwhile) and try on a later sweep
+      await kv.atomic().check({ key: entry.key, versionstamp: null })
+        .set(entry.key, rec, { expireIn: MAC_KV_TTL }).commit();
+      return false;
+    }
     const code = await fireRoutine({ ...rec.job, bundle_id: rec.bundle_id });
     if (code) {
       await say(
@@ -302,7 +343,6 @@ export function makeHandler(deps: Deps): Handler {
         }, but I could not start the analysis. Send the link again.`,
       );
     }
-    await kv.delete(jobKey(rec.job.update_id));
     return true;
   }
 
@@ -311,17 +351,21 @@ export function makeHandler(deps: Deps): Handler {
     const now = deps.now();
     for await (const e of kv.list<MacJob>({ prefix: ["mac", "job"] })) {
       const rec = e.value;
+      const drop = () => kv.atomic().check(e).delete(e.key).commit(); // only one sweep tells the user
       if (now - rec.created >= MAC_JOB_TTL) {
-        await kv.delete(e.key);
+        if (!(await drop()).ok) continue;
         await say(
           rec.job.chat_id,
-          `I couldn't run ${linkOf(rec.job)} because your Mac wasn't online for 24 hours. ` +
-            "Send the link again and I'll retry.",
+          rec.state === "ready"
+            ? `I fetched ${linkOf(rec.job)} but my hourly run limit stayed full for 24 hours. ` +
+              "Send the link again and I'll retry."
+            : `I couldn't run ${linkOf(rec.job)} because your Mac wasn't online for 24 hours. ` +
+              "Send the link again and I'll retry.",
         );
       } else if (rec.state === "ready") {
-        await fireReady(rec);
+        await fireReady(e);
       } else if (rec.lease_until && rec.lease_until <= now && rec.attempts >= MAC_MAX_ATTEMPTS) {
-        await kv.delete(e.key);
+        if (!(await drop()).ok) continue;
         await say(
           rec.job.chat_id,
           `Your Mac started ${linkOf(rec.job)} twice but never finished it. ` +
@@ -332,7 +376,7 @@ export function makeHandler(deps: Deps): Handler {
   }
 
   // RELAY_SECRET: the routine hands a blocked link job to the Mac queue.
-  async function defer(req: Request): Promise<Response> {
+  async function defer(req: Request, origin: string): Promise<Response> {
     if (req.method !== "POST") return text("method not allowed", 405);
     const b = await req.json().catch(() => null);
     const j = b?.job;
@@ -343,6 +387,19 @@ export function makeHandler(deps: Deps): Handler {
     ) return json({ error: "bad request" }, 400);
     if (!owner || String(j.chat_id) !== owner) return json({ error: "not the owner" }, 403);
     if (!env("MAC_SECRET")) return json({ queued: false, reason: "no_mac" });
+    // The job must come from a real owner message: the webhook wrote this row.
+    if (!(await kv.get(["upd", j.update_id])).value) return json({ error: "unknown update" }, 403);
+    let pending = 0;
+    for await (const _ of kv.list({ prefix: ["mac", "job"] })) pending++;
+    if (pending >= MAC_MAX_PENDING && !(await kv.get(jobKey(j.update_id))).value) {
+      await say(
+        j.chat_id,
+        `Your Mac already has ${MAC_MAX_PENDING} videos waiting, so I can't hold ${
+          linkOf(j)
+        }. Send it again once they're done.`,
+      );
+      return json({ queued: false, reason: "queue_full", told: true });
+    }
     const clean = {
       v: 1,
       update_id: j.update_id,
@@ -350,7 +407,7 @@ export function makeHandler(deps: Deps): Handler {
       message_id: typeof j.message_id === "number" ? j.message_id : 0,
       text: j.text.slice(0, 4000),
       file: null,
-      relay_url: typeof j.relay_url === "string" ? j.relay_url : "",
+      relay_url: origin, // our own origin, never the caller's
     };
     const rec: MacJob = {
       job: clean,
@@ -527,8 +584,8 @@ export function makeHandler(deps: Deps): Handler {
     }
     await kv.set(["mac", "bundle", id, "meta"], meta, { expireIn: DAY });
     const ready: MacJob = { ...rec, state: "ready", bundle_id: id };
-    await kv.set(cur.key, ready, { expireIn: MAC_KV_TTL });
-    const fired = await fireReady(ready);
+    const put = await kv.set(cur.key, ready, { expireIn: MAC_KV_TTL });
+    const fired = await fireReady({ key: cur.key, value: ready, versionstamp: put.versionstamp });
     return json({ ok: true, fired });
   }
 
@@ -538,7 +595,7 @@ export function makeHandler(deps: Deps): Handler {
     const auth = req.headers.get("authorization") ?? "";
     if (!secret || !(await safeEqual(auth, `Bearer ${secret}`))) return text("unauthorized", 401);
 
-    if (path === "/api/defer") return await defer(req);
+    if (path === "/api/defer") return await defer(req, new URL(req.url).origin);
     if (path.startsWith("/api/bundle/")) {
       if (req.method !== "GET") return text("method not allowed", 405);
       return await bundleGet(path.slice("/api/bundle/".length));
@@ -621,7 +678,9 @@ export function makeHandler(deps: Deps): Handler {
       if (req.method === "GET") {
         const prof = (await kv.get<Json>(["profile"])).value ?? {};
         const projects = (await kv.get<string[]>(["projects"])).value ?? [];
-        return json({ ...prof, projects });
+        const goals = (await kv.get<string[]>(["goals"])).value;
+        // own keys always win over anything stored in the profile object
+        return json({ ...prof, goals: goals ?? [], projects });
       }
       if (req.method === "PUT") {
         const raw = new Uint8Array(await req.arrayBuffer());
@@ -636,6 +695,7 @@ export function makeHandler(deps: Deps): Handler {
           return json({ error: "profile must be a JSON object" }, 400);
         }
         delete v.projects; // the project list lives under its own key and is only set by /projects
+        delete v.goals; // likewise goals: only /goals sets them
         await kv.set(["profile"], v);
         return json({ ok: true });
       }

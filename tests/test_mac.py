@@ -114,6 +114,7 @@ def test_bundle_is_written_with_our_own_paths(tmp_path):
     assert [Path(f["path"]).parent for f in data["frames"]] == [(tmp_path / "frames").resolve()] * 3
     assert Path(data["frames"][0]["path"]).read_bytes() == JPEG
     assert data["transcript"] == "[0:01] hi" and "notes" not in data
+    assert data["frames_to_read"] == [f["path"] for f in data["frames"]]
     assert (tmp_path / "job.json").exists() and (tmp_path / "profile.json").exists()
 
 
@@ -275,6 +276,41 @@ def test_no_whisper_unless_installed_and_never_groq(monkeypatch, tmp_path):
     assert mac_worker.local_only_transcript(tmp_path / "v.mp4") == ""
     src = Path(mac_worker.__file__).read_text()
     assert "whisper_transcribe" not in src and "api.groq" not in src and "load_groq_key" not in src
+
+
+class _Seg:
+    def __init__(self, start, text):
+        self.start, self.text = start, text
+
+
+def test_local_whisper_gets_the_media_file_not_the_folder(tmp_path):
+    (tmp_path / "dl").mkdir()
+    (tmp_path / "dl" / "video.mp4").write_bytes(b"x" * 50)
+    (tmp_path / "dl" / "video.info.json").write_text("{}")
+    seen = []
+
+    class Model:
+        def transcribe(self, path, **kw):
+            seen.append(Path(path))
+            return iter([_Seg(65, " hello "), _Seg(70, "  ")]), None
+
+    out = mac_worker.local_only_transcript(tmp_path, model_factory=Model)
+    assert out == "[1:05] hello" and seen == [tmp_path / "dl" / "video.mp4"] and seen[0].is_file()
+
+
+def test_local_whisper_without_media_or_with_a_hung_model(tmp_path):
+    assert mac_worker.local_only_transcript(tmp_path, model_factory=lambda: pytest.fail("no media")) == ""
+    (tmp_path / "v.mp4").write_bytes(b"x")
+    import time
+
+    class Hung:
+        def transcribe(self, path, **kw):
+            time.sleep(2)
+            return iter([]), None
+
+    t0 = time.time()
+    assert mac_worker.local_only_transcript(tmp_path, model_factory=Hung, timeout_s=0.2) == ""
+    assert time.time() - t0 < 1.5
 
 
 def test_run_once_needs_config(tmp_path, monkeypatch, capsys):

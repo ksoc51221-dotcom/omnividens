@@ -12,6 +12,7 @@ from pathlib import Path
 from reelay.cloud.job import Job, first_url, github_links, parse_job
 from reelay.cloud.relay import Relay, RelayError
 from reelay.cloud.speech import find_media, local_transcript
+from reelay.factcheck.prompt import pick_frames
 from reelay.video import load_video
 from reelay.video.errors import BlockedError, VideoError
 
@@ -23,6 +24,8 @@ MAX_FRAMES = 20
 MAX_FRAME_BYTES = 50_000
 MAX_TRANSCRIPT = 24_000
 _JPEG_MAGIC = b"\xff\xd8\xff"
+MAX_FRAMES_TO_READ_MAC = MAX_FRAMES  # Mac jobs: all of the 20 frames
+MAX_FRAMES_TO_READ = 12  # frames the routine is told to read; a Mac job may raise this (T25 uses 20)
 _EXT_OK = {".mp4", ".mov", ".webm", ".mkv", ".m4v"}
 
 
@@ -40,6 +43,7 @@ def _bundle_dict(b, caption_text: str, links: list[str], started: float = 0.0) -
         "caption": b.caption,
         "message_text": caption_text,
         "github_links": links,
+        "frames_to_read": [str(Path(f.image).resolve()) for f in pick_frames(b, MAX_FRAMES_TO_READ)],
         "started_at": started,
     }
 
@@ -93,6 +97,7 @@ def _from_bundle(job: Job, work: Path, relay, started: float) -> int:
         "frames": frames, "transcript": transcript, "caption": caption, "message_text": job.text,
         "github_links": github_links(job.text, caption, transcript), "started_at": started,
         "fetched_by": "owner's Mac",
+        "frames_to_read": [f["path"] for f in frames[:MAX_FRAMES_TO_READ_MAC]],
     }
     if not transcript:
         data["notes"] = [NO_CAPTIONS_NOTE]
@@ -108,11 +113,11 @@ def _defer_to_mac(relay, job: Job, err: BlockedError) -> int:
     if job.bundle_id:  # this job already came from the Mac: never queue again
         return _fail(relay, job, err.cloud_message or err.user_message)
     try:
-        queued = relay.defer(job.raw).get("queued") is True
+        answer = relay.defer(job.raw)
     except RelayError as e:
         print(f"reelay: {e}")
-        queued = False
-    if queued:
+        answer = {}
+    if answer.get("queued") is True or answer.get("told") is True:
         return 3  # the relay already told the user
     return _fail(relay, job, err.cloud_message or err.user_message)
 

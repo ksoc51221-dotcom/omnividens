@@ -21,11 +21,13 @@ async function setup(env: Record<string, string> = ENV, fire = 200) {
   const clock = { t: 3600000 * 100 };
   const calls: Call[] = [];
   let ids = 0;
-  const fakeFetch = (input: string | URL | Request, init?: RequestInit) => {
+  const hooks: { beforeFire?: () => Promise<void> } = {};
+  const fakeFetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
     calls.push({ url, init, body });
     if (url === env.ROUTINE_FIRE_URL) {
+      await hooks.beforeFire?.();
       return Promise.resolve(new Response("SECRET BODY", { status: fire }));
     }
     if (url.endsWith("/getFile")) {
@@ -66,8 +68,12 @@ async function setup(env: Record<string, string> = ENV, fire = 200) {
     );
   const mac = (path: string, method = "GET", body?: unknown, auth = "Bearer macsec") =>
     api(path, method, body, auth);
+  const defer = async (job: { update_id: number; [k: string]: unknown }) => {
+    await kv.set(["upd", job.update_id], 1); // the webhook writes this row for every real update
+    return api("/api/defer", "POST", { job });
+  };
   const sent = () => calls.filter((c) => c.url.endsWith("/sendMessage")).map((c) => c.body.text);
-  return { handler, kv, calls, hook, api, sent, clock, mac, done: () => kv.close() };
+  return { handler, kv, calls, hook, api, sent, clock, mac, hooks, defer, done: () => kv.close() };
 }
 
 const msg = (id: number, from: number, extra: object = { text: "hi" }) => ({
@@ -231,9 +237,9 @@ Deno.test("file: streams small, refuses over 20MB, validates id", async () => {
 
 Deno.test("profile: roundtrip, size cap, object only", async () => {
   const t = await setup();
-  assertEq(await (await t.api("/api/profile")).json(), { projects: [] });
+  assertEq(await (await t.api("/api/profile")).json(), { goals: [], projects: [] });
   assertEq((await t.api("/api/profile", "PUT", { a: 1 })).status, 200);
-  assertEq(await (await t.api("/api/profile")).json(), { a: 1, projects: [] });
+  assertEq(await (await t.api("/api/profile")).json(), { a: 1, goals: [], projects: [] });
   assertEq((await t.api("/api/profile", "PUT", { a: "x".repeat(70000) })).status, 413);
   assertEq((await t.api("/api/profile", "PUT", "[1]")).status, 400);
   assertEq((await t.api("/api/profile", "PUT", "nope")).status, 400);
@@ -428,41 +434,41 @@ Deno.test("MAC_SECRET unset: worker routes closed, defer says not queued", async
   const t = await setup();
   assertEq((await t.mac("/api/mac/next", "GET", undefined, "Bearer ")).status, 401);
   assertEq((await t.mac("/api/mac/next", "GET", undefined, "Bearer undefined")).status, 401);
-  const r = await (await t.api("/api/defer", "POST", { job: JOB })).json();
+  const r = await (await t.defer(JOB)).json();
   assertEq(r.queued, false);
   t.done();
 });
 
 Deno.test("defer: Mac never seen -> offline message; seen <3 min -> online message", async () => {
   const t = await setup(MENV);
-  assertEq((await t.api("/api/defer", "POST", { job: JOB })).status, 200);
+  assertEq((await t.defer(JOB)).status, 200);
   assertEq(t.sent().length, 1);
   if (!t.sent()[0].includes("isn't online (last seen never)")) throw new Error(t.sent()[0]);
   await t.mac("/api/mac/next"); // heartbeat
-  await t.api("/api/defer", "POST", { job: { ...JOB, update_id: 51 } });
+  await t.defer({ ...JOB, update_id: 51 });
   assertEq(
     t.sent()[1],
     "YouTube blocks downloads from the cloud, so your Mac is fetching this one. Your report follows in a few minutes.",
   );
   t.clock.t += 4 * 60 * 1000; // heartbeat is now stale
-  await t.api("/api/defer", "POST", { job: { ...JOB, update_id: 52 } });
+  await t.defer({ ...JOB, update_id: 52 });
   if (!/last seen \d{4}-\d\d-\d\d \d\d:\d\d UTC/.test(t.sent()[2])) throw new Error(t.sent()[2]);
   t.done();
 });
 
 Deno.test("defer: one queued job per update_id, no loops, owner only", async () => {
   const t = await setup(MENV);
-  assertEq((await (await t.api("/api/defer", "POST", { job: JOB })).json()).queued, true);
-  const again = await (await t.api("/api/defer", "POST", { job: JOB })).json();
+  assertEq((await (await t.defer(JOB)).json()).queued, true);
+  const again = await (await t.defer(JOB)).json();
   assertEq(again.duplicate, true);
   assertEq(t.sent().length, 1); // told once
-  assertEq((await t.api("/api/defer", "POST", { job: { ...JOB, bundle_id: "b1" } })).status, 400);
+  assertEq((await t.defer({ ...JOB, bundle_id: "b1" })).status, 400);
   assertEq(
-    (await t.api("/api/defer", "POST", { job: { ...JOB, update_id: 9, chat_id: 7 } })).status,
+    (await t.defer({ ...JOB, update_id: 9, chat_id: 7 })).status,
     403,
   );
   assertEq(
-    (await t.api("/api/defer", "POST", { job: { ...JOB, update_id: 9, file: { file_id: "f" } } }))
+    (await t.defer({ ...JOB, update_id: 9, file: { file_id: "f" } }))
       .status,
     400,
   );
@@ -471,7 +477,7 @@ Deno.test("defer: one queued job per update_id, no loops, owner only", async () 
 
 Deno.test("lease: claimed job is hidden for 15 min, comes back, gives up after two attempts", async () => {
   const t = await setup(MENV);
-  await t.api("/api/defer", "POST", { job: JOB });
+  await t.defer(JOB);
   const first = await (await t.mac("/api/mac/next")).json();
   assertEq([first.update_id, first.attempt], [50, 1]);
   assertEq((await t.mac("/api/mac/next")).status, 204); // leased
@@ -496,8 +502,8 @@ Deno.test("lease: claimed job is hidden for 15 min, comes back, gives up after t
 
 Deno.test("oldest job is claimed first", async () => {
   const t = await setup(MENV);
-  await t.api("/api/defer", "POST", { job: { ...JOB, update_id: 70 } });
-  await t.api("/api/defer", "POST", { job: { ...JOB, update_id: 60 } });
+  await t.defer({ ...JOB, update_id: 70 });
+  await t.defer({ ...JOB, update_id: 60 });
   assertEq((await (await t.mac("/api/mac/next")).json()).update_id, 60);
   assertEq((await (await t.mac("/api/mac/next")).json()).update_id, 70);
   t.done();
@@ -505,7 +511,7 @@ Deno.test("oldest job is claimed first", async () => {
 
 Deno.test("bundle: stored per frame, fires routine with bundle_id, routine can read it back", async () => {
   const t = await setup(MENV);
-  await t.api("/api/defer", "POST", { job: JOB });
+  await t.defer(JOB);
   const c = await (await t.mac("/api/mac/next")).json();
   const r = await t.mac("/api/mac/bundle", "POST", bundleBody(50, c.lease, 3));
   assertEq(r.status, 200);
@@ -528,7 +534,7 @@ Deno.test("bundle: stored per frame, fires routine with bundle_id, routine can r
 
 Deno.test("bundle size caps: 21 frames, 50 KB+ frame, non-JPEG, junk all rejected; long text trimmed", async () => {
   const t = await setup(MENV);
-  await t.api("/api/defer", "POST", { job: JOB });
+  await t.defer(JOB);
   const c = await (await t.mac("/api/mac/next")).json();
   assertEq((await t.mac("/api/mac/bundle", "POST", bundleBody(50, c.lease, 21))).status, 400);
   assertEq((await t.mac("/api/mac/bundle", "POST", bundleBody(50, c.lease, 0))).status, 400);
@@ -555,7 +561,7 @@ Deno.test("bundle size caps: 21 frames, 50 KB+ frame, non-JPEG, junk all rejecte
 Deno.test("bundle at the rate cap waits and fires on a later poll", async () => {
   const t = await setup({ ...MENV, MAX_RUNS_PER_HOUR: "1" });
   await t.hook(msg(1, 42)); // uses the only slot
-  await t.api("/api/defer", "POST", { job: JOB });
+  await t.defer(JOB);
   const c = await (await t.mac("/api/mac/next")).json();
   assertEq(
     (await (await t.mac("/api/mac/bundle", "POST", bundleBody(50, c.lease))).json()).fired,
@@ -571,7 +577,7 @@ Deno.test("bundle at the rate cap waits and fires on a later poll", async () => 
 
 Deno.test("fail: real cause reaches the user, job is removed", async () => {
   const t = await setup(MENV);
-  await t.api("/api/defer", "POST", { job: JOB });
+  await t.defer(JOB);
   const c = await (await t.mac("/api/mac/next")).json();
   const r = await t.mac("/api/mac/fail", "POST", {
     update_id: 50,
@@ -583,7 +589,7 @@ Deno.test("fail: real cause reaches the user, job is removed", async () => {
   if (!m.includes("https://youtu.be/abc") || !m.includes("rate limiting")) throw new Error(m);
   assertEq((await t.mac("/api/mac/next")).status, 204);
   // wrong lease is refused
-  await t.api("/api/defer", "POST", { job: { ...JOB, update_id: 51 } });
+  await t.defer({ ...JOB, update_id: 51 });
   await t.mac("/api/mac/next");
   assertEq(
     (await t.mac("/api/mac/fail", "POST", { update_id: 51, lease: "guess", reason: "blocked" }))
@@ -596,7 +602,7 @@ Deno.test("fail: real cause reaches the user, job is removed", async () => {
 Deno.test("expiry: after 24 h the user is told, naming the link, on a webhook or a poll or sweep()", async () => {
   for (const how of ["poll", "webhook", "sweep"]) {
     const t = await setup(MENV);
-    await t.api("/api/defer", "POST", { job: JOB });
+    await t.defer(JOB);
     const before = t.sent().length;
     t.clock.t += 23 * 3600 * 1000;
     await t.handler.sweep();
@@ -614,4 +620,106 @@ Deno.test("expiry: after 24 h the user is told, naming the link, on a webhook or
     assertEq((await t.mac("/api/mac/next")).status, 204);
     t.done();
   }
+});
+
+Deno.test("/goals: save, show, clear, caps; PUT cannot erase or set them", async () => {
+  const t = await setup();
+  await t.hook(msg(1, 42, { text: "/goals" }));
+  assertEq(t.sent().at(-1)!.startsWith("No goals yet"), true);
+  await t.hook(msg(2, 42, { text: "/goals\nWin the hackathon\nShip a daily tool" }));
+  assertEq(t.sent().at(-1), "Saved 2 goals.");
+  await t.hook(msg(3, 42, { text: "/goals" }));
+  assertEq(t.sent().at(-1), "Your goals (2):\nWin the hackathon\nShip a daily tool");
+  await t.api("/api/profile", "PUT", { vibe: "hype", goals: ["Hacked"], traits: {} });
+  const got = await (await t.api("/api/profile")).json();
+  assertEq(got.goals, ["Win the hackathon", "Ship a daily tool"]);
+  assertEq(got.vibe, "hype");
+  await t.hook(msg(4, 42, { text: "/goals\n1\n2\n3\n4\n5\n6" }));
+  assertEq(t.sent().at(-1)!.startsWith("Not saved"), true);
+  await t.hook(msg(5, 42, { text: "/goals " + "x".repeat(301) }));
+  assertEq(t.sent().at(-1)!.startsWith("Not saved"), true);
+  assertEq((await (await t.api("/api/profile")).json()).goals.length, 2);
+  await t.hook(msg(6, 42, { text: "/goals clear" }));
+  assertEq((await (await t.api("/api/profile")).json()).goals, []);
+  assertEq(t.calls.filter((c) => c.url === ENV.ROUTINE_FIRE_URL).length, 0);
+  await t.hook(msg(7, 999, { text: "/goals\nEvil" })); // stranger
+  assertEq((await (await t.api("/api/profile")).json()).goals, []);
+  t.done();
+});
+
+Deno.test("double fire: a webhook arriving during the fire does not fire the job twice", async () => {
+  const t = await setup(MENV);
+  await t.defer(JOB);
+  const c = await (await t.mac("/api/mac/next")).json();
+  let entered = 0;
+  t.hooks.beforeFire = async () => {
+    if (++entered === 1) {
+      await t.hook(msg(77, 999)); // webhook sweeps while the first fire is in flight
+      await t.mac("/api/mac/next"); // and so does a poll
+    }
+  };
+  const r = await t.mac("/api/mac/bundle", "POST", bundleBody(50, c.lease));
+  assertEq(r.status, 200);
+  assertEq(fires(t).length, 1);
+  assertEq((await t.mac("/api/mac/next")).status, 204);
+  t.done();
+});
+
+Deno.test("two concurrent sweeps tell the user about an expiry once", async () => {
+  const t = await setup(MENV);
+  await t.defer(JOB);
+  const before = t.sent().length;
+  t.clock.t += 25 * 3600 * 1000;
+  await Promise.all([t.handler.sweep(), t.handler.sweep()]);
+  assertEq(t.sent().length, before + 1);
+  t.done();
+});
+
+Deno.test("defer needs the webhook's update row", async () => {
+  const t = await setup(MENV);
+  assertEq((await t.api("/api/defer", "POST", { job: JOB })).status, 403);
+  assertEq(t.sent().length, 0);
+  assertEq((await t.mac("/api/mac/next")).status, 204);
+  t.done();
+});
+
+Deno.test("defer caps pending Mac jobs at 5 and tells the owner", async () => {
+  const t = await setup(MENV);
+  for (let i = 1; i <= 5; i++) {
+    assertEq((await (await t.defer({ ...JOB, update_id: i })).json()).queued, true);
+  }
+  const before = t.sent().length;
+  const r = await (await t.defer({ ...JOB, update_id: 6 })).json();
+  assertEq([r.queued, r.told], [false, true]);
+  assertEq(t.sent().length, before + 1);
+  if (
+    !t.sent().at(-1)!.includes("5 videos waiting") ||
+    !t.sent().at(-1)!.includes("https://youtu.be/abc")
+  ) {
+    throw new Error(t.sent().at(-1));
+  }
+  assertEq((await (await t.defer({ ...JOB, update_id: 1 })).json()).duplicate, true); // existing one still dedupes
+  t.done();
+});
+
+Deno.test("defer ignores the caller's relay_url and uses its own origin", async () => {
+  const t = await setup(MENV);
+  await t.defer({ ...JOB, relay_url: "https://evil.example/" + "x".repeat(100_000) });
+  const c = await (await t.mac("/api/mac/next")).json();
+  assertEq(c.job.relay_url, "https://relay.example");
+  t.done();
+});
+
+Deno.test("an expired job that was ready gets the right reason", async () => {
+  const t = await setup({ ...MENV, MAX_RUNS_PER_HOUR: "1" });
+  await t.hook(msg(1, 42)); // uses the only slot
+  await t.defer(JOB);
+  const c = await (await t.mac("/api/mac/next")).json();
+  await t.mac("/api/mac/bundle", "POST", bundleBody(50, c.lease));
+  assertEq(fires(t).length, 1);
+  t.clock.t += 25 * 3600 * 1000 - 3600 * 1000 * 0; // cap hour rolled over, but expiry comes first in the sweep
+  await t.handler.sweep();
+  if (!t.sent().at(-1)!.includes("hourly run limit")) throw new Error(t.sent().at(-1));
+  assertEq(fires(t).length, 1);
+  t.done();
 });

@@ -19,9 +19,11 @@ import sys
 import tempfile
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from reelay.cloud.job import first_url
+from reelay.cloud.speech import MAX_CHARS, MODEL, find_media
 from reelay.cloud.relay import RelayError, _NoRedirect, check_relay_url
 from reelay.core.config import ConfigError, load_config, reelay_home
 from reelay.installer import service
@@ -119,20 +121,36 @@ def _installed_whisper() -> bool:
     return importlib.util.find_spec("faster_whisper") is not None
 
 
-def local_only_transcript(video: Path) -> str:
-    """faster-whisper if already installed with its model already downloaded. Never a cloud service."""
-    if not _installed_whisper():
+WHISPER_TIMEOUT_S = 300
+
+
+def local_only_transcript(work: Path, model_factory=None, timeout_s: int = WHISPER_TIMEOUT_S) -> str:
+    """faster-whisper if already installed with its model already downloaded. Never a cloud service.
+
+    `work` is the temp folder; the biggest media file in it is transcribed. The model call runs in a
+    thread and is abandoned after `timeout_s`, so a hung model cannot hold the one-shot launchd process.
+    """
+    media = find_media(work)
+    if media is None or (model_factory is None and not _installed_whisper()):
         return ""
-    try:
-        from faster_whisper import WhisperModel
-        from reelay.cloud.speech import MAX_CHARS, MODEL
-        segments, _ = WhisperModel(MODEL, device="cpu", compute_type="int8",
-                                   local_files_only=True).transcribe(str(video), vad_filter=True)
+    if model_factory is None:
+        def model_factory():
+            from faster_whisper import WhisperModel
+            return WhisperModel(MODEL, device="cpu", compute_type="int8", local_files_only=True)
+
+    def run() -> str:
+        segments, _ = model_factory().transcribe(str(media), vad_filter=True)
         lines = [f"[{int(s.start) // 60}:{int(s.start) % 60:02d}] {s.text.strip()}"
                  for s in segments if s.text.strip()]
         return "\n".join(lines)[:MAX_CHARS]
-    except Exception:  # noqa: BLE001 - model not cached, bad audio: just no transcript
+
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        return pool.submit(run).result(timeout=timeout_s)
+    except Exception:  # noqa: BLE001 - timeout, model not cached, bad audio: just no transcript
         return ""
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 def build_upload(bundle, transcript: str) -> tuple[dict, list[dict]]:

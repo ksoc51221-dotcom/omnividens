@@ -104,8 +104,9 @@ def test_buttons_from_strangers_and_junk_ignored(setup):
     assert setup[3] == []
 
 
-def test_download_failed_asks_for_screen_recording():
-    assert "screen recording" in download_failed_reply().text
+def test_download_failed_names_real_causes():
+    text = download_failed_reply().text
+    assert "screen recording" not in text and "private, removed or unsupported" in text and "rate limiting" in text
 
 
 def test_config_token(tmp_path, monkeypatch):

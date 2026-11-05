@@ -40,6 +40,7 @@ from reelay.bot import ADOPT, SKIP, Incoming, ReelayBot, Reply, report_reply
 from reelay.core.config import ConfigError, reelay_home
 from reelay.core.types import Candidate, Instruction, Job, JobKind, Profile, TrialReport, Verdict, VideoBundle
 from reelay.router import Clarification
+from reelay.factcheck.prompt import MAX_FRAMES
 from reelay.video import VideoError
 
 log = logging.getLogger(__name__)
@@ -170,7 +171,8 @@ def format_verdict(verdict: Verdict, profile: Profile, bundle: VideoBundle) -> s
     elif verdict.claims:
         lines.append(f"{len(verdict.claims)} claim(s) checked. Ask for /vibe or /quiz to change detail.")
     counts = {v: sum(c.verdict == v for c in verdict.claims) for v in _ICONS}
-    saw = f"{len(bundle.frames)} frames + " + ("transcript" if bundle.transcript else "no transcript")
+    seen = min(len(bundle.frames), MAX_FRAMES)  # the fact-check only receives a sample of the frames
+    saw = (f"{seen} of {len(bundle.frames)} frames" if seen < len(bundle.frames) else f"{seen} frames") + " + " + ("transcript" if bundle.transcript else "no transcript")
     checked = (f"{len(verdict.claims)} claims ("
                + ", ".join(f"{n} {v}" for v, n in counts.items() if n) + ")") if verdict.claims else "no claims found"
     lines += ["", receipt(saw, checked, "nothing")]

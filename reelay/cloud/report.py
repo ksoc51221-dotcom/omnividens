@@ -46,6 +46,17 @@ def _label_key(url) -> str:
     return (f"{p[0]}/{p[1]}" if p else str(url)).lower()
 
 
+def saw_line(viewed, total: int) -> str:
+    """What the routine says it looked at, never more than what was extracted."""
+    if total <= 0:
+        return "No frames were extracted."
+    if isinstance(viewed, float) and viewed.is_integer():
+        viewed = int(viewed)
+    if isinstance(viewed, bool) or not isinstance(viewed, int):
+        return f"{total} frames extracted, number viewed not reported."
+    return f"Saw: {max(0, min(viewed, total))} of {total} frames."
+
+
 def _build(data: dict, verdict, projects: list[str]):
     """(reports, left-out labels) in video order, at most MAX_REPORTS, one per URL."""
     reps, seen, left = [], set(), []
@@ -127,7 +138,11 @@ def run(workdir: str, relay_factory=Relay, cloner=_hardened_clone) -> int:
         profile = _profile(prof_d, job.chat_id)
         supplied = [x for x in (bundle_d.get("owner_supplied") or []) if isinstance(x, str)][:1]
         repo_only = bool(supplied)  # /report owner/repo: one repo, no fact-check message
-        verdict = parse_verdict(raw, bundle.duration_s) if not repo_only else Verdict(summary="", claims=[])
+        vstats: dict = {}
+        # Cloud: claim sources are only displayed, never fetched, so they get a shape check without DNS
+        # (cited by the model, not resolved). Candidates are still fully checked inside parse_verdict.
+        verdict = (parse_verdict(raw, bundle.duration_s, resolve_sources=False, stats=vstats)
+                   if not repo_only else Verdict(summary="", claims=[]))
         data = extract_json(raw) if raw else None
         data = data if isinstance(data, dict) else {}
         reps, left = _build(data, verdict, _projects(prof_d.get("projects")))
@@ -149,7 +164,8 @@ def run(workdir: str, relay_factory=Relay, cloner=_hardened_clone) -> int:
         sent, daily = 0, False
         if not repo_only:
             relay.send(job.chat_id, _reports.format_factcheck(
-                verdict, "" if reps or left else "Done. Nothing to install in this one."))
+                verdict, "" if reps or left else "Done. Nothing to install in this one.",
+                saw=saw_line(data.get("frames_viewed"), len(frames))))
             sent += 1
         elif not reps:
             relay.send(job.chat_id, "I couldn't build a report for that repo. Nothing was installed.")
@@ -169,6 +185,8 @@ def run(workdir: str, relay_factory=Relay, cloner=_hardened_clone) -> int:
             sent += 1
         started = bundle_d.get("started_at")
         secs = f"{time.time() - started:.0f}" if isinstance(started, (int, float)) else "unknown"
+        print(f"reelay: claims={len(verdict.claims)} sources_kept={vstats.get('sources_kept', 0)} "
+              f"sources_dropped={vstats.get('sources_dropped', 0)}")
         print(f"reelay: run candidates={len(reps) + len(left)} reports={done} messages={sent} seconds={secs}")
         try:
             prof_d.setdefault("traits", {})

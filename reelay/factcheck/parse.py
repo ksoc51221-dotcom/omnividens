@@ -65,13 +65,21 @@ def _is_public(addr: str) -> bool:
     return ip.is_global and not ip.is_multicast
 
 
-def good_url(url, cache: dict | None = None) -> str | None:
-    """An https URL to a public, resolvable host, else None. Fails closed when unsure."""
+def good_url(url, cache: dict | None = None, resolve: bool = True) -> str | None:
+    """An https URL to a public, resolvable host, else None. Fails closed when unsure.
+
+    `resolve=False` is shape-only (scheme, no credentials, a real public-looking name, port rules, no DNS):
+    only for text that is displayed and never fetched or cloned, e.g. a claim's cited source."""
     if (not isinstance(url, str) or len(url) > 500 or "\\" in url
             or any(c.isspace() or ord(c) < 32 for c in url)):
         return None
     try:
-        check_url(url)
+        if resolve:
+            check_url(url)
+        else:
+            p = urlparse(url)
+            if p.scheme != "https" or not p.hostname or p.username or p.password or url.startswith("-"):
+                return None
         host = (urlparse(url).hostname or "").lower().rstrip(".")
         port = urlparse(url).port
     except (FetchError, ValueError):
@@ -79,6 +87,8 @@ def good_url(url, cache: dict | None = None) -> str | None:
     tld = host.rsplit(".", 1)[-1]
     if "." not in host or not tld.isalpha() or host.endswith(_INTERNAL_SUFFIXES) or port not in (None, 443):
         return None  # needs a real name: no IPs, single-label or internal names, odd ports
+    if not resolve:
+        return url
     cache = cache if cache is not None else {}
     if host not in cache:
         try:
@@ -107,7 +117,7 @@ def extract_json(raw: str):
     return None
 
 
-def _claim(item, duration_s: float, cache: dict) -> Claim | None:
+def _claim(item, duration_s: float, cache: dict, resolve: bool = True, stats: dict | None = None) -> Claim | None:
     if not isinstance(item, dict):
         return None
     text = strip_urls(_text(item.get("text"), 500))
@@ -117,7 +127,11 @@ def _claim(item, duration_s: float, cache: dict) -> Claim | None:
     if isinstance(t, bool) or not isinstance(t, (int, float)) or not 0 <= t <= duration_s + 5:
         t = None
     sources = item.get("sources")
-    urls = [u for u in (good_url(s, cache) for s in (sources if isinstance(sources, list) else [])[:MAX_SOURCES]) if u]
+    given = (sources if isinstance(sources, list) else [])[:MAX_SOURCES]
+    urls = [u for u in (good_url(s, cache, resolve) for s in given) if u]
+    if stats is not None:
+        stats["sources_kept"] = stats.get("sources_kept", 0) + len(urls)
+        stats["sources_dropped"] = stats.get("sources_dropped", 0) + len(given) - len(urls)
     verdict = item.get("verdict")
     verdict = verdict.strip().lower() if isinstance(verdict, str) else ""
     if verdict not in VERDICTS or (verdict != "unverified" and not urls):
@@ -135,7 +149,10 @@ def _candidate(item, cache: dict) -> Candidate | None:
     return Candidate(name=name, kind=kind if kind in KINDS else "other", url=url)
 
 
-def parse_verdict(raw: str, duration_s: float = 0.0) -> Verdict:
+def parse_verdict(raw: str, duration_s: float = 0.0, resolve_sources: bool = True,
+                  stats: dict | None = None) -> Verdict:
+    """`resolve_sources=False` (cloud): claim sources are shape-checked only, because they are only shown.
+    Candidates are always fully checked (DNS, public IPs): they get fetched or cloned. `stats` gets counts."""
     data = extract_json(raw) if isinstance(raw, str) else None
     if not isinstance(data, dict):
         return failed("the answer was not valid JSON")
@@ -144,7 +161,7 @@ def parse_verdict(raw: str, duration_s: float = 0.0) -> Verdict:
     if not summary:
         return failed("the answer had no summary")
     claims_in = data.get("claims") if isinstance(data.get("claims"), list) else []
-    claims = [c for c in (_claim(i, duration_s, cache) for i in claims_in[:MAX_CLAIMS]) if c]
+    claims = [c for c in (_claim(i, duration_s, cache, resolve_sources, stats) for i in claims_in[:MAX_CLAIMS]) if c]
     cands, seen = [], set()
     for item in (data.get("candidates") if isinstance(data.get("candidates"), list) else [])[:MAX_CANDIDATES]:
         c = _candidate(item, cache)

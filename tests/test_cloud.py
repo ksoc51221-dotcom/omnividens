@@ -599,3 +599,89 @@ def test_run_prints_one_log_line(fake, tmp_path, capsys):
     _write_report_dir(tmp_path, verdict_with(rep()))
     run_report(relay, tmp_path)
     assert "reelay: run candidates=1 reports=1 messages=2" in capsys.readouterr().out
+
+
+# ---- live bugs: sources lost to DNS, receipt overstating frames
+
+def _claims_json(sources):
+    return json.dumps({"summary": "s", "claims": [
+        {"text": "c1", "time_s": 1, "verdict": "true", "sources": sources},
+        {"text": "c2", "time_s": 2, "verdict": "misleading", "sources": sources}],
+        "candidates": [{"name": "n", "kind": "repo", "url": "https://github.com/a/b"}]})
+
+
+def test_old_path_loses_every_verdict_when_dns_fails(monkeypatch):
+    monkeypatch.setattr(parse, "_addresses", lambda h: (_ for _ in ()).throw(OSError("no dns")))
+    v = parse.parse_verdict(_claims_json(["https://en.wikipedia.org/wiki/X"]), 30.0)
+    assert [c.verdict for c in v.claims] == ["unverified", "unverified"]  # the live bug
+
+
+def test_cloud_sources_are_shape_checked_only_and_candidates_still_resolve(monkeypatch):
+    monkeypatch.setattr(parse, "_addresses", lambda h: (_ for _ in ()).throw(OSError("no dns")))
+    stats = {}
+    v = parse.parse_verdict(_claims_json(["https://en.wikipedia.org/wiki/X", "http://x.org/a",
+                                          "https://10.0.0.1/a", "https://user:pw@x.org/a", "https://x.org:8443/a",
+                                          "https://intranet.corp/a"]), 30.0, resolve_sources=False, stats=stats)
+    assert [c.verdict for c in v.claims] == ["true", "misleading"]
+    assert v.claims[0].sources == ["https://en.wikipedia.org/wiki/X"]
+    assert v.candidates == []  # a candidate on an unresolvable host is still dropped (it would be cloned)
+    assert stats == {"sources_kept": 2, "sources_dropped": 8}
+
+
+def test_shape_mode_makes_no_dns_calls(monkeypatch):
+    calls = []
+    monkeypatch.setattr(parse, "_addresses", lambda h: calls.append(h) or ["1.2.3.4"])
+    monkeypatch.setattr("reelay.sandbox.fetch.is_private_host", lambda u: calls.append(u) or False)
+    assert parse.good_url("https://example.org/x", resolve=False) == "https://example.org/x" and calls == []
+
+
+def test_report_keeps_verdicts_and_logs_counts_only(fake, tmp_path, monkeypatch, capsys):
+    relay, _ = fake
+    monkeypatch.setattr(parse, "_addresses", lambda h: (_ for _ in ()).throw(OSError("no dns")))
+    _write_report_dir(tmp_path, _claims_json(["https://en.wikipedia.org/wiki/X"]))
+    run_report(relay, tmp_path)
+    assert "(true)" in relay.sent[0][1] and "(misleading)" in relay.sent[0][1]
+    out = capsys.readouterr().out
+    assert "claims=2 sources_kept=2 sources_dropped=0" in out and "wikipedia" not in out
+
+
+@pytest.mark.parametrize("viewed,total,expect", [
+    (4, 30, "Saw: 4 of 30 frames."), (99, 30, "Saw: 30 of 30 frames."), (-3, 30, "Saw: 0 of 30 frames."),
+    (4.0, 30, "Saw: 4 of 30 frames."), (4.5, 30, "30 frames extracted, number viewed not reported."),
+    (None, 30, "30 frames extracted, number viewed not reported."),
+    ("4", 30, "30 frames extracted, number viewed not reported."),
+    (True, 30, "30 frames extracted, number viewed not reported."), (3, 0, "No frames were extracted."),
+])
+def test_saw_line_never_claims_more_than_extracted(viewed, total, expect):
+    assert report.saw_line(viewed, total) == expect
+
+
+def test_report_shows_frames_viewed_in_factcheck(fake, tmp_path):
+    relay, _ = fake
+    (tmp_path / "bundle.json").write_text("{}")
+    v = {"summary": "ok", "claims": [], "frames_viewed": 4}
+    _write_report_dir(tmp_path, v)
+    b = json.loads((tmp_path / "bundle.json").read_text())
+    b["frames"] = [{"time_s": i, "path": f"/x/{i}.jpg"} for i in range(30)]
+    (tmp_path / "bundle.json").write_text(json.dumps(b))
+    run_report(relay, tmp_path)
+    assert "Saw: 4 of 30 frames." in relay.sent[0][1]
+
+
+def test_prepare_writes_frames_to_read(fake, tmp_path, monkeypatch):
+    relay, _ = fake
+    imgs = []
+
+    def many(source, work, **kw):
+        for i in range(30):
+            img = Path(work) / "frames" / f"f{i:02}.jpg"
+            img.parent.mkdir(parents=True, exist_ok=True)
+            img.write_bytes(b"jpg")
+            imgs.append(img)
+        return VideoBundle(source_url=str(source), frames=[Frame(float(i), p) for i, p in enumerate(imgs)],
+                           transcript="t", caption="", duration_s=30.0)
+    monkeypatch.setattr(prepare, "load_video", many)
+    assert run_prepare(relay, job("https://www.tiktok.com/@a/video/1"), tmp_path) == 0
+    b = json.loads((tmp_path / "bundle.json").read_text())
+    assert len(b["frames"]) == 30 and len(b["frames_to_read"]) == prepare.MAX_FRAMES_TO_READ == 12
+    assert b["frames_to_read"][0].endswith("f00.jpg") and len(set(b["frames_to_read"])) == 12
