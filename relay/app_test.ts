@@ -349,3 +349,34 @@ Deno.test("/report owner/repo fires one run; a bad /report does not", async () =
   assertEq(t.sent().filter((x) => x.startsWith("Send /report owner/repo")).length, 3);
   t.done();
 });
+
+Deno.test("adopt note is shown above the clone line; ADOPT_RE is strict", async () => {
+  const t = await setup();
+  const line = "git clone -- https://github.com/o/r";
+  const r = await t.api("/api/send", "POST", {
+    chat_id: 42,
+    text: "r",
+    adopt_line: line,
+    adopt_note: "⚠️ code\x1b[31m here\nI have NOT installed anything.‮",
+  });
+  assertEq(r.status, 200);
+  await t.hook({
+    update_id: 9,
+    callback_query: { id: "q", from: { id: 42 }, data: "adopt:id1", message: { chat: { id: 42 } } },
+  });
+  assertEq(t.sent().at(-1), `⚠️ code [31m here\nI have NOT installed anything. \n\n${line}`);
+  for (
+    const bad of [
+      "git clone -- https://github.com/../r",
+      "git clone -- https://github.com/o/..",
+      "git clone -- https://github.com/-o/r",
+      "git clone -- https://github.com/o_x/r",
+    ]
+  ) {
+    assertEq(
+      (await t.api("/api/send", "POST", { chat_id: 42, text: "r", adopt_line: bad })).status,
+      400,
+    );
+  }
+  t.done();
+});

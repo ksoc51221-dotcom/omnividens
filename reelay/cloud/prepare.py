@@ -36,7 +36,7 @@ def _bundle_dict(b, caption_text: str, links: list[str], started: float = 0.0) -
     }
 
 
-_REPORT_CMD = re.compile(r"/report(?:@\w+)?\s+([A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*)\s*")
+_REPORT_CMD = re.compile(r"/report(?:@\w+)?\s+([A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]*)\s*")
 
 
 def _repo_only(job: Job, work: Path, relay, started: float) -> int:

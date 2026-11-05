@@ -2,13 +2,18 @@
 
 import datetime
 import json
+import re
 import shutil
+import subprocess
+import tempfile
 import time
 from pathlib import Path
 
 from reelay.cloud.job import github_links, parse_job
 from reelay.cloud.relay import Relay, RelayError
 from reelay.core import reports as _reports
+from reelay.sandbox.fetch import MAX_CLONE_BYTES, FetchError, check_url
+from reelay.sandbox.fetch import _size as fetch_size
 from reelay.core.types import Frame, Profile, Verdict, VideoBundle
 from reelay.factcheck.parse import extract_json, parse_verdict
 from reelay.profile.store import MAX_GOAL_LEN, MAX_GOALS, MAX_TRAIT_LEN, MAX_TRAITS, VIBES
@@ -36,23 +41,30 @@ def _projects(raw) -> list[str]:
     return out
 
 
+def _label_key(url) -> str:
+    p = _reports.repo_parts(url)
+    return (f"{p[0]}/{p[1]}" if p else str(url)).lower()
+
+
 def _build(data: dict, verdict, projects: list[str]):
     """(reports, left-out labels) in video order, at most MAX_REPORTS, one per URL."""
     reps, seen, left = [], set(), []
     items = data.get("reports") if isinstance(data.get("reports"), list) else []
     for item in items:
         r = _reports.parse_report(item, projects)
-        if r is None or r.url in seen:
+        key = (r.owner_repo or r.url).lower() if r else None
+        if r is None or key in seen:
             continue
-        seen.add(r.url)
+        seen.add(key)
         if len(reps) < _reports.MAX_REPORTS:
             reps.append(r)
         else:
             left.append(_reports.repo_label(r.url, r.name))
-    left += [_reports.repo_label(c.url, c.name) for c in verdict.candidates if c.url not in seen]
+    left += [_reports.repo_label(c.url, c.name) for c in verdict.candidates
+             if (_label_key(c.url)) not in seen]
     for u in (data.get("left_out") if isinstance(data.get("left_out"), list) else [])[:30]:
         p = _reports.repo_parts(u)
-        if p and u not in seen and f"{p[0]}/{p[1]}" not in left:
+        if p and f"{p[0]}/{p[1]}".lower() not in seen and f"{p[0]}/{p[1]}" not in left:
             left.append(f"{p[0]}/{p[1]}")
     return reps, left
 
@@ -66,15 +78,27 @@ def _confirmed(bundle_d: dict, bundle: VideoBundle, supplied: list[str]) -> set[
     return out | {s.lower() for s in supplied}
 
 
-def _cleanup(trial_root: Path, reps) -> None:
-    for r in reps:
-        p = _reports.repo_parts(r.url)
-        d = trial_root / f"{p[0]}__{p[1]}" if p else None
-        if d is not None and d.is_dir() and not d.is_symlink():
-            shutil.rmtree(d, ignore_errors=True)
+def _hardened_clone(url: str, dest: Path, timeout_s: int = 60) -> str | None:
+    """Our own shallow clone for the gate (never the model's). Same limits as sandbox/fetch.py, plus LFS off.
+    Returns the commit scanned, or raises."""
+    check_url(url)
+    cmd = ["git", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always",
+           "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
+           "clone", "--depth", "1", "--no-tags", "--single-branch", "--", url, str(dest)]
+    env = {"PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin", "GIT_TERMINAL_PROMPT": "0",
+           "GIT_LFS_SKIP_SMUDGE": "1"}
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s, env=env)
+    if proc.returncode != 0:
+        raise FetchError("git clone failed")
+    if fetch_size(dest) > MAX_CLONE_BYTES:
+        raise FetchError("repository is larger than 50 MB")
+    head = subprocess.run(["git", "-C", str(dest), "rev-parse", "HEAD"], capture_output=True, text=True,
+                          timeout=20, env=env)
+    commit = head.stdout.strip()
+    return commit if head.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", commit) else None
 
 
-def run(workdir: str, relay_factory=Relay, trial_root: str = "/tmp/trial") -> int:
+def run(workdir: str, relay_factory=Relay, cloner=_hardened_clone) -> int:
     work = Path(workdir)
     try:
         job = parse_job((work / "job.json").read_text(encoding="utf-8"))
@@ -111,10 +135,17 @@ def run(workdir: str, relay_factory=Relay, trial_root: str = "/tmp/trial") -> in
             reps = [r for r in reps if r.owner_repo and r.owner_repo.lower() == supplied[0].lower()][:1]
             left = []
         confirmed = _confirmed(bundle_d, bundle, supplied)
-        root = Path(trial_root)
-        for r in reps:
-            p = _reports.repo_parts(r.url)
-            _reports.apply_gate(r, root / f"{p[0]}__{p[1]}" if p else None, confirmed)
+        with tempfile.TemporaryDirectory(prefix="reelay-gate-") as tmp:  # always removed
+            for i, r in enumerate(reps):
+                clone, commit = Path(tmp) / f"c{i}", None
+                try:
+                    if _reports.repo_parts(r.url):
+                        commit = cloner(r.url, clone)
+                except Exception as e:  # noqa: BLE001 - a failed clone means UNSURE, never a pass
+                    print(f"reelay: clone failed ({type(e).__name__})")
+                    shutil.rmtree(clone, ignore_errors=True)
+                    clone = None
+                _reports.apply_gate(r, clone, confirmed, commit)
         sent, daily = 0, False
         if not repo_only:
             relay.send(job.chat_id, _reports.format_factcheck(
@@ -127,13 +158,12 @@ def run(workdir: str, relay_factory=Relay, trial_root: str = "/tmp/trial") -> in
         for i, rep in enumerate(reps):
             text, line = _reports.format_report(rep)
             try:
-                relay.send(job.chat_id, text, line, report=True)
+                relay.send(job.chat_id, text, line, report=True, adopt_note=_reports.adopt_note(rep))
                 sent, done = sent + 1, done + 1
             except RelayError as e:  # daily budget or relay trouble: stop and say what was left out
-                daily = "429" in str(e)
+                daily = getattr(e, "status", None) == 429
                 left = [_reports.repo_label(r.url, r.name) for r in reps[i:]] + left
                 break
-        _cleanup(root, reps)
         if left:
             relay.send(job.chat_id, _reports.left_out_line(left, daily))
             sent += 1

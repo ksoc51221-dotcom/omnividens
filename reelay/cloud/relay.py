@@ -16,7 +16,7 @@ TIMEOUT_S = 60
 
 
 class RelayError(Exception):
-    pass
+    status: int | None = None  # HTTP status when the relay answered with one
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -49,15 +49,20 @@ class Relay:
         try:
             return self._opener.open(req, timeout=TIMEOUT_S)
         except urllib.error.HTTPError as e:
-            raise RelayError(f"relay answered {e.code} for {method} {path.split('/')[1:3]}") from None
+            err = RelayError(f"relay answered {e.code} for {method} {path.split('/')[1:3]}")
+            err.status = e.code
+            raise err from None
         except (urllib.error.URLError, OSError, ValueError) as e:
             raise RelayError(f"relay unreachable ({type(e).__name__})") from None
 
-    def send(self, chat_id: int, text: str, adopt_line: str | None = None, report: bool = False) -> None:
+    def send(self, chat_id: int, text: str, adopt_line: str | None = None, report: bool = False,
+             adopt_note: str | None = None) -> None:
         """`report=True` counts the message against the relay's daily report budget."""
         body = {"chat_id": chat_id, "text": text, "adopt_line": adopt_line}
         if report:
             body["report"] = True
+        if adopt_note and adopt_line:
+            body["adopt_note"] = adopt_note
         with self._request("POST", "/api/send", body):
             pass
 

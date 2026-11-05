@@ -14,13 +14,22 @@ from reelay.sandbox.safety import find_problem
 
 TYPES = {"skill": "bot skill", "mod": "mod", "app": "full app"}  # fixed list; anything else is "unclear"
 ADOPT_TYPES = {"skill", "mod"}
+# A mod is code that runs on the user's machine, so a clean scan of a repo that contains code can never be
+# "YES". Owner decision pending: True keeps Adopt for a skill/mod with confirmed identity and file evidence
+# even when it contains code (UNSURE + warning); False makes that case read-only.
+ADOPT_ALLOWED_WITH_CODE = True
 VERDICTS = ("YES", "NO", "UNSURE")
 MAX_REPORTS = 9  # per video
 MAX_TEXT = 3800
 NO_PROJECTS = "No project list yet. Send /projects to add one."
 NO_FIT = "No fit with your listed projects."
-_REPO = re.compile(r"https://github\.com/([A-Za-z0-9][A-Za-z0-9._-]*)/([A-Za-z0-9][A-Za-z0-9._-]*)")
-_CTRL = re.compile(r"[\x00-\x1f\x7f]+")
+_REPO = re.compile(r"https://github\.com/([A-Za-z0-9][A-Za-z0-9-]*)/([A-Za-z0-9][A-Za-z0-9._-]*)")
+# control chars, plus bidi overrides/isolates and zero-width marks that can hide or reorder text
+_CTRL = re.compile("[\x00-\x1f\x7f\u061c\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]+")
+_COMMIT = re.compile(r"[0-9a-f]{7,40}")
+_SCRIPT_EXT = {".sh", ".bash", ".zsh", ".py", ".js", ".mjs", ".cjs", ".ts", ".rb", ".pl", ".ps1", ".bat", ".cmd",
+               ".command", ".php"}
+_MANIFESTS = {"plugin.json", "settings.json", "settings.local.json", "hooks.json", "package.json"}
 _LINK = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
 _LEVELS = ("low", "medium", "high")
 _ICONS = {"true": "✅", "false": "❌", "misleading": "⚠️", "unverified": "❔"}
@@ -36,7 +45,7 @@ def plain(value, limit: int) -> str:
 
 def repo_parts(url) -> tuple[str, str] | None:
     m = _REPO.fullmatch(url) if isinstance(url, str) else None
-    if not m or {m.group(1), m.group(2)} & {".", ".."} or m.group(2).endswith(".git"):
+    if not m or {m.group(1), m.group(2)} & {".", ".."} or m.group(2).lower().endswith(".git"):
         return None
     return m.group(1), m.group(2)
 
@@ -64,6 +73,9 @@ class CandidateReport:
     usage: dict = field(default_factory=dict)  # validated, every number labelled
     examples: list[str] = field(default_factory=list)
     ran: bool = False  # the routine never runs anything; always False
+    code_paths: list[str] = field(default_factory=list)  # executable-looking files found in the clone (max 5)
+    has_code: bool = False
+    commit: str | None = None  # the commit our own clone scanned
     model_safety: str = "UNSURE"  # what the model said; it can only lower the final verdict
     claim_matches: bool = False
 
@@ -147,25 +159,73 @@ def _safe_dir(clone: Path | None) -> bool:
     return clone is not None and clone.is_dir() and not clone.is_symlink()
 
 
-def apply_gate(rep: CandidateReport, clone: Path | None, confirmed: set[str]) -> CandidateReport:
+def _clean_path(rel: str) -> str:
+    """A repo path made safe to show: plain characters only."""
+    return re.sub(r"[^A-Za-z0-9._/@+-]", "?", rel)[:80]
+
+
+def find_code(clone: Path) -> list[str]:
+    """Executable-looking content: hooks/, scripts/, script files, or a manifest that mentions hooks.
+    Returns sanitised relative paths (the first 5 are shown); empty means none was found."""
+    found: list[str] = []
+    seen = 0
+    try:
+        for p in sorted(clone.rglob("*")):
+            rel = p.relative_to(clone)
+            if ".git" in rel.parts:
+                continue
+            seen += 1
+            if seen > 5000:
+                break
+            low = [x.lower() for x in rel.parts]
+            hit = False
+            if p.is_dir() and low[-1] in ("hooks", "scripts") and len(low) <= 4:
+                hit = True
+            elif p.is_file():
+                if p.suffix.lower() in _SCRIPT_EXT or any(x in ("hooks", "scripts") for x in low[:-1]):
+                    hit = True
+                elif low[-1] in _MANIFESTS and p.stat().st_size < 1_000_000 \
+                        and b'"hooks"' in p.read_bytes()[:1_000_000].lower():
+                    hit = True
+            if hit:
+                found.append(_clean_path(rel.as_posix()))
+    except OSError:
+        pass
+    return found
+
+
+def apply_gate(rep: CandidateReport, clone: Path | None, confirmed: set[str],
+               commit: str | None = None) -> CandidateReport:
     """Decide safety, identity and type from evidence, not from model output.
 
-    `confirmed` is the lowercase owner/repo set the owner or the video itself supplied (links found in the
-    caption, transcript or message, or typed in /report). The result can only be as good as that evidence."""
+    `clone` is OUR OWN shallow clone (never the model's); `confirmed` is the lowercase owner/repo set the
+    owner or the video itself supplied (links in the caption, transcript or message, or typed in /report)."""
     rep.ran = False
+    rep.commit = commit if isinstance(commit, str) and _COMMIT.fullmatch(commit) else None
     ok_id = bool(rep.owner_repo) and rep.claim_matches and rep.owner_repo.lower() in confirmed
     rep.name_only = not ok_id
+    rep.has_code, rep.code_paths = False, []
     # safety: our own scan of the clone
-    if not _safe_dir(clone):
-        scan, why = "unknown", "I couldn't fetch it to scan it, so I only know what the README claims."
-    else:
+    scan = "unknown"
+    why = "I couldn't fetch it to scan it, so I only know what the README claims."
+    if _safe_dir(clone):
         try:
             problem = find_problem(clone)
+            code = find_code(clone) if not problem else []
         except Exception:  # noqa: BLE001 - a scan error is never a pass
-            scan, why = "unknown", "The safety scan could not finish."
+            why = "The safety scan could not finish."
         else:
-            scan, why = ("high", f"The safety scan flagged it: {plain(problem, 140)}.") if problem else \
-                ("clean", "The safety scan found nothing risky in the files.")
+            if problem and str(problem).startswith("too large"):
+                why = "It is too big to scan, so I only know what the README claims."
+            elif problem:
+                scan, why = "high", f"The safety scan flagged it: {plain(problem, 140)}."
+            elif code:
+                scan, rep.has_code, rep.code_paths = "code", True, code[:5]
+                why = ("It contains code that would run on your computer. I did not read or run it; read "
+                       "these first: " + ", ".join(rep.code_paths))
+            else:
+                scan, why = "clean", ("I found none of the patterns I check for (hooks in skill files, "
+                                      "symlinks, shell commands on load). That is not a guarantee.")
     if scan == "high" or rep.model_safety == "NO":
         rep.safety = "NO"
         rep.safety_reason = why if scan == "high" else (rep.safety_reason or "The review found risky behaviour.")
@@ -173,12 +233,12 @@ def apply_gate(rep: CandidateReport, clone: Path | None, confirmed: set[str]) ->
         rep.safety, rep.safety_reason = "YES", why
     else:
         rep.safety = "UNSURE"
-        if scan == "clean" and not ok_id:
+        if scan in ("clean", "code") and not ok_id:
             rep.safety_reason = "I couldn't confirm this is the exact repo the video meant."
         elif scan == "clean":
-            rep.safety_reason = rep.safety_reason or "The scan was clean but the review was not sure. I only read the code, I didn't run it."
+            rep.safety_reason = rep.safety_reason or "The scan found nothing, but the review was not sure. I only read the code, I didn't run it."
         else:
-            rep.safety_reason = why
+            rep.safety_reason = why  # fixed, written by code
     # type: a claimed skill or mod must be backed by files in the clone
     if rep.type in ADOPT_TYPES:
         ev = type_evidence(clone) if _safe_dir(clone) else set()
@@ -190,10 +250,32 @@ def apply_gate(rep: CandidateReport, clone: Path | None, confirmed: set[str]) ->
 
 
 def adopt_line(rep: CandidateReport) -> str | None:
-    """The ONLY place a clone line is allowed: skill/mod, verified exact repo, safety YES. Never run by us."""
-    if rep.type in ADOPT_TYPES and rep.safety == "YES" and rep.owner_repo and not rep.name_only:
+    """The ONLY place a clone line is allowed. Never run by us.
+
+    Needs a skill/mod backed by files, an exact repo confirmed by the video or the owner, and either safety
+    YES or (while ADOPT_ALLOWED_WITH_CODE) the one UNSURE case: a clean scan of a repo that contains code."""
+    if rep.type not in ADOPT_TYPES or not rep.owner_repo or rep.name_only:
+        return None
+    if rep.safety == "YES" and not rep.has_code:
+        return adopt_line_for(rep.url)
+    if rep.safety == "UNSURE" and rep.has_code and ADOPT_ALLOWED_WITH_CODE:
         return adopt_line_for(rep.url)
     return None
+
+
+def adopt_note(rep: CandidateReport) -> str | None:
+    """Plain text the relay prints above the clone line when Adopt is tapped (fixed wording, code-written)."""
+    if not adopt_line(rep):
+        return None
+    parts = []
+    if rep.has_code:
+        parts.append("⚠️ It contains code that would run on your computer. Read these first: "
+                     + ", ".join(rep.code_paths))
+    if rep.commit:
+        parts.append(f"I scanned commit {rep.commit[:12]}. The repo may have changed since, so check the commit "
+                     "you get.")
+    parts.append("I have NOT installed anything.")
+    return "\n".join(parts)
 
 
 def _usage_lines(u: dict) -> str:
@@ -220,6 +302,8 @@ def format_report(rep: CandidateReport) -> tuple[str, str | None]:
     safe = f"1. Is it safe? {rep.safety}: {rep.safety_reason}"
     if rep.safety == "NO":
         safe += " I recommend Skip."
+    if rep.commit:
+        ident += f" · scanned commit {rep.commit[:12]}"
     lines += [safe, f"Repo: {ident}", "",
               f"2. What it does: {rep.what}" + (f" Problem it solves: {rep.problem}" if rep.problem else "")]
     if rep.pros:
@@ -229,7 +313,10 @@ def format_report(rep: CandidateReport) -> tuple[str, str | None]:
     lines += ["", f"3. Where it fits you: {rep.impact}", f"4. Usage: {_usage_lines(rep.usage)}"]
     if rep.examples:
         lines.append("Used for: " + "; ".join(rep.examples))
-    if line:
+    if line and rep.has_code:
+        lines.append("⚠️ It contains code that runs on your computer. Adopt only shows the install command. "
+                     "I have NOT installed anything.")
+    elif line:
         lines.append("Adopt shows the install command. I have NOT installed anything.")
     elif rep.type in ("app", "unclear"):
         lines.append("Read-only: no install button for this one. Nothing was installed.")

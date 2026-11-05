@@ -80,3 +80,9 @@ The trial scan rejects markdown that contains `` !`cmd` `` / ```` ```! ```` shel
 
 ## Known gaps
 No VM/container; no live verification of the trial permission rules, `--bare` hook blocking, Telegram, or the router API call; DNS rebinding/redirects are only partly covered (`is_private_host` checks only the first hop, and yt-dlp follows redirects, so a public URL that redirects to a private address is not caught); the pairing lockout resets on restart; `install.sh` follows `main` unpinned until a release tag exists; `~/.reelay/config.toml` should be `chmod 600` (done by the installer).
+
+## Cloud report gate (T20)
+
+- `reelay/core/reports.py` decides Adopt in code, not from model output: safety from `find_problem` on the report command's own shallow clone (hardened flags: https only, no hooks, no LFS, 60 s, 50 MB), identity from links in the video text or a repo the owner typed in `/report`, type from files in that clone. The model can only lower a verdict.
+- A scan that finds no code and none of the checked patterns says "found none of the patterns I check for"; it never says "safe". A repo that contains hooks, `scripts/` or script files is UNSURE with a code-written warning and the file names. While `ADOPT_ALLOWED_WITH_CODE` is True such a skill/mod with confirmed identity and file evidence still gets Adopt (the owner asked for mods and hooks); set it to False and that case becomes read-only. Adopt only prints a `git clone` line. The scanned commit is shown, since the user later clones the current tip.
+- Limit: the gate protects against model mistakes and ordinary prompt injection. It does not protect against a fully hijacked routine, which holds the relay secret and could call `/api/send` with any `git clone -- https://github.com/o/r` line; the relay's strict `ADOPT_RE` is the only check there.

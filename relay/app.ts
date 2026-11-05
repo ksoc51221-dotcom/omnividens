@@ -8,7 +8,8 @@ export interface Deps {
   randomId: () => string;
 }
 
-const ADOPT_RE = /^git clone -- https:\/\/github\.com\/[\w.-]+\/[\w.-]+$/;
+const ADOPT_RE =
+  /^git clone -- https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9-]*\/(?!\.{1,2}$)[A-Za-z0-9._-]+$/;
 const FILE_ID_RE = /^[\w-]{1,256}$/;
 const MAX_FILE = 20 * 1024 * 1024;
 const MAX_PROFILE = 64 * 1024;
@@ -131,8 +132,10 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
     await tg("answerCallbackQuery", { callback_query_id: cb.id });
     if (!m || typeof chat !== "number") return;
     if (m[1] === "skip") return void await say(chat, "Skipped.");
-    const line = (await kv.get<string>(["adopt", m[2]])).value;
-    await say(chat, line ?? "That suggestion expired.");
+    const stored = (await kv.get<string | { line: string; note?: string }>(["adopt", m[2]])).value;
+    const line = typeof stored === "string" ? stored : stored?.line;
+    const note = typeof stored === "object" && stored?.note ? `${stored.note}\n\n` : "";
+    await say(chat, line ? note + line : "That suggestion expired.");
   }
 
   // Owner's written project list: handled here, before any routine run, so it costs no routine call.
@@ -251,7 +254,8 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
       if (b.report === true) { // daily report budget; one report per send
         const day = Math.floor(deps.now() / DAY);
         const max = Number(env("MAX_REPORTS_PER_DAY")) || 30;
-        for (;;) {
+        let booked = false;
+        for (let tries = 0; tries < 10 && !booked; tries++) {
           const cur = await kv.get<number>(["reports", day]);
           const n = cur.value ?? 0;
           if (n >= max) return json({ error: "daily report limit" }, 429);
@@ -259,15 +263,23 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
             expireIn: 2 * DAY,
           })
             .commit();
-          if (res.ok) break;
+          booked = res.ok;
         }
+        if (!booked) return json({ error: "busy, try again" }, 503);
       }
       const parts: string[] = [];
       for (let i = 0; i < b.text.length; i += 4096) parts.push(b.text.slice(i, i + 4096));
       let id: string | null = null;
       if (line) {
         id = deps.randomId();
-        await kv.set(["adopt", id], line, { expireIn: 7 * DAY });
+        const note = typeof b.adopt_note === "string"
+          // code-written plain text only: no control characters, capped
+          ? b.adopt_note.replace(/[\x00-\x09\x0b-\x1f\x7f\u202a-\u202e\u2066-\u2069]/g, " ").slice(
+            0,
+            600,
+          )
+          : "";
+        await kv.set(["adopt", id], note ? { line, note } : line, { expireIn: 7 * DAY });
       }
       for (let i = 0; i < parts.length; i++) {
         const last = i === parts.length - 1;
