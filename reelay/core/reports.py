@@ -28,7 +28,12 @@ _CTRL = re.compile("[\x00-\x1f\x7f\u061c\u200b-\u200f\u202a-\u202e\u2066-\u2069\
 _COMMIT = re.compile(r"[0-9a-f]{7,40}")
 _SCRIPT_EXT = {".sh", ".bash", ".zsh", ".py", ".js", ".mjs", ".cjs", ".ts", ".rb", ".pl", ".ps1", ".bat", ".cmd",
                ".command", ".php"}
-_MANIFESTS = {"plugin.json", "settings.json", "settings.local.json", "hooks.json", "package.json"}
+_MANIFESTS = {"plugin.json", "settings.json", "settings.local.json", "hooks.json", "package.json", ".mcp.json",
+              "mcp.json"}
+_BUILD_FILES = {"makefile", "gnumakefile", "justfile"}
+_MCP_FILES = {".mcp.json", "mcp.json"}  # an MCP server is a program the owner's machine would start
+_BINARY_MAGIC = (b"\x7fELF", b"MZ", b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf", b"\xce\xfa\xed\xfe",
+                 b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca")
 _LINK = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
 _LEVELS = ("low", "medium", "high")
 _ICONS = {"true": "✅", "false": "❌", "misleading": "⚠️", "unverified": "❔"}
@@ -163,8 +168,21 @@ def _clean_path(rel: str) -> str:
     return re.sub(r"[^A-Za-z0-9._/@+-]", "?", rel)[:80]
 
 
+def _looks_executable(p: Path) -> bool:
+    """A shebang, an ELF/Mach-O/PE binary, or a manifest that declares hooks or MCP servers."""
+    with open(p, "rb") as f:
+        head = f.read(8)
+        if head[:2] == b"#!" or head.startswith(_BINARY_MAGIC):
+            return True
+        if p.name.lower() in _MANIFESTS and p.stat().st_size < 1_000_000:
+            body = (head + f.read()).lower()
+            return b'"hooks"' in body or b'"mcpservers"' in body
+    return False
+
+
 def find_code(clone: Path) -> list[str]:
-    """Executable-looking content: hooks/, scripts/, script files, or a manifest that mentions hooks.
+    """Executable-looking content: hooks/ or scripts/, script files, build files, files with the exec bit or a
+    shebang, binaries, MCP configs, or a manifest that declares hooks or MCP servers.
     Returns sanitised relative paths (the first 5 are shown); empty means none was found."""
     found: list[str] = []
     seen = 0
@@ -180,12 +198,10 @@ def find_code(clone: Path) -> list[str]:
             hit = False
             if p.is_dir() and low[-1] in ("hooks", "scripts") and len(low) <= 4:
                 hit = True
-            elif p.is_file():
-                if p.suffix.lower() in _SCRIPT_EXT or any(x in ("hooks", "scripts") for x in low[:-1]):
-                    hit = True
-                elif low[-1] in _MANIFESTS and p.stat().st_size < 1_000_000 \
-                        and b'"hooks"' in p.read_bytes()[:1_000_000].lower():
-                    hit = True
+            elif p.is_file() and not p.is_symlink():
+                hit = (p.suffix.lower() in _SCRIPT_EXT or low[-1] in _BUILD_FILES or low[-1] in _MCP_FILES
+                       or any(x in ("hooks", "scripts") for x in low[:-1]) or bool(p.stat().st_mode & 0o111)
+                       or _looks_executable(p))
             if hit:
                 found.append(_clean_path(rel.as_posix()))
     except OSError:

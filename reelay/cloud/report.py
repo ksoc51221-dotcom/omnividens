@@ -2,8 +2,10 @@
 
 import datetime
 import json
+import os
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -89,6 +91,14 @@ def _confirmed(bundle_d: dict, bundle: VideoBundle, supplied: list[str]) -> set[
     return out | {s.lower() for s in supplied}
 
 
+def _dir_bytes(path: Path) -> int:
+    """Size of a folder git is still writing into; files vanish mid-scan, so errors count as 0."""
+    try:
+        return fetch_size(path) if path.exists() else 0
+    except OSError:
+        return 0
+
+
 def _hardened_clone(url: str, dest: Path, timeout_s: int = 60) -> str | None:
     """Our own shallow clone for the gate (never the model's). Same limits as sandbox/fetch.py, plus LFS off.
     Returns the commit scanned, or raises."""
@@ -98,7 +108,19 @@ def _hardened_clone(url: str, dest: Path, timeout_s: int = 60) -> str | None:
            "clone", "--depth", "1", "--no-tags", "--single-branch", "--", url, str(dest)]
     env = {"PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin", "GIT_TERMINAL_PROMPT": "0",
            "GIT_LFS_SKIP_SMUDGE": "1"}
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s, env=env)
+    # own process group, so a timeout or an oversized clone kills git and anything it started
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env,
+                            start_new_session=True)
+    deadline = time.monotonic() + timeout_s
+    try:
+        while proc.poll() is None:
+            if time.monotonic() > deadline or _dir_bytes(dest) > MAX_CLONE_BYTES:
+                raise FetchError("git clone timed out or is over 50 MB")
+            time.sleep(0.25)
+    except BaseException:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait()
+        raise
     if proc.returncode != 0:
         raise FetchError("git clone failed")
     if fetch_size(dest) > MAX_CLONE_BYTES:

