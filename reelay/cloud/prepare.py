@@ -10,11 +10,13 @@ from pathlib import Path
 from reelay.cloud.job import Job, first_url, github_links, parse_job
 from reelay.cloud.relay import Relay, RelayError
 from reelay.cloud.speech import find_media, local_transcript
+from reelay.factcheck.prompt import pick_frames
 from reelay.video import load_video
 from reelay.video.errors import VideoError
 
 NO_LINK_REPLY = "Send me a video or a link to a Reel/TikTok/Short."
 ERROR_FALLBACK = "Sorry, I couldn't process that. Please try again or send the video file."
+MAX_FRAMES_TO_READ = 12  # frames the routine is told to read; a Mac job may raise this (T25 uses 20)
 _EXT_OK = {".mp4", ".mov", ".webm", ".mkv", ".m4v"}
 
 
@@ -32,6 +34,7 @@ def _bundle_dict(b, caption_text: str, links: list[str], started: float = 0.0) -
         "caption": b.caption,
         "message_text": caption_text,
         "github_links": links,
+        "frames_to_read": [str(Path(f.image).resolve()) for f in pick_frames(b, MAX_FRAMES_TO_READ)],
         "started_at": started,
     }
 

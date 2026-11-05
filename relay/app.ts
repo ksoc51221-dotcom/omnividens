@@ -15,6 +15,8 @@ const MAX_FILE = 20 * 1024 * 1024;
 const MAX_PROFILE = 64 * 1024;
 const MAX_PROJECT_LINES = 20;
 const MAX_PROJECT_LINE = 200;
+const MAX_GOAL_LINES = 5;
+const MAX_GOAL_LINE = 300;
 const DAY = 24 * 3600 * 1000;
 const REQUIRED = [
   "TELEGRAM_BOT_TOKEN",
@@ -164,11 +166,40 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
     await say(chat, `Saved ${lines.length} project${lines.length === 1 ? "" : "s"}.`);
   }
 
+  // Owner's goals: same pattern as /projects, own key, so a profile write by the routine can't erase them.
+  async function goalsCommand(chat: number, arg: string) {
+    const cur = (await kv.get<string[]>(["goals"])).value ?? [];
+    if (!arg) {
+      return void await say(
+        chat,
+        cur.length
+          ? `Your goals (${cur.length}):\n${cur.join("\n")}`
+          : "No goals yet. Send /goals followed by up to 5 lines, one goal per line.",
+      );
+    }
+    if (arg.toLowerCase() === "clear") {
+      await kv.delete(["goals"]);
+      return void await say(chat, "Goals cleared.");
+    }
+    const lines = arg.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    if (lines.length > MAX_GOAL_LINES || lines.some((l) => l.length > MAX_GOAL_LINE)) {
+      return void await say(
+        chat,
+        `Not saved: at most ${MAX_GOAL_LINES} lines, ${MAX_GOAL_LINE} characters each.`,
+      );
+    }
+    await kv.set(["goals"], lines);
+    await say(chat, `Saved ${lines.length} goal${lines.length === 1 ? "" : "s"}.`);
+  }
+
   async function ownerMessage(msg: Json, updateId: number, origin: string) {
     const chat: number = msg.chat.id;
     const files = [msg.video, msg.document, msg.animation].filter((f) => f?.file_id);
     const text_: string = String(msg.text ?? msg.caption ?? "");
     if (!text_ && !files.length) return;
+    if (!files.length && /^\/goals(@\w+)?(\s|$)/.test(text_.trim())) {
+      return void await goalsCommand(chat, text_.trim().replace(/^\/goals(@\w+)?/, "").trim());
+    }
     if (!files.length && /^\/projects(@\w+)?(\s|$)/.test(text_.trim())) {
       return void await projectsCommand(
         chat,
@@ -320,7 +351,9 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
       if (req.method === "GET") {
         const prof = (await kv.get<Json>(["profile"])).value ?? {};
         const projects = (await kv.get<string[]>(["projects"])).value ?? [];
-        return json({ ...prof, projects });
+        const goals = (await kv.get<string[]>(["goals"])).value;
+        // own keys always win over anything stored in the profile object
+        return json({ ...prof, goals: goals ?? [], projects });
       }
       if (req.method === "PUT") {
         const raw = new Uint8Array(await req.arrayBuffer());
@@ -335,6 +368,7 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
           return json({ error: "profile must be a JSON object" }, 400);
         }
         delete v.projects; // the project list lives under its own key and is only set by /projects
+        delete v.goals; // likewise goals: only /goals sets them
         await kv.set(["profile"], v);
         return json({ ok: true });
       }

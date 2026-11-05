@@ -228,9 +228,9 @@ Deno.test("file: streams small, refuses over 20MB, validates id", async () => {
 
 Deno.test("profile: roundtrip, size cap, object only", async () => {
   const t = await setup();
-  assertEq(await (await t.api("/api/profile")).json(), { projects: [] });
+  assertEq(await (await t.api("/api/profile")).json(), { goals: [], projects: [] });
   assertEq((await t.api("/api/profile", "PUT", { a: 1 })).status, 200);
-  assertEq(await (await t.api("/api/profile")).json(), { a: 1, projects: [] });
+  assertEq(await (await t.api("/api/profile")).json(), { a: 1, goals: [], projects: [] });
   assertEq((await t.api("/api/profile", "PUT", { a: "x".repeat(70000) })).status, 413);
   assertEq((await t.api("/api/profile", "PUT", "[1]")).status, 400);
   assertEq((await t.api("/api/profile", "PUT", "nope")).status, 400);
@@ -378,5 +378,30 @@ Deno.test("adopt note is shown above the clone line; ADOPT_RE is strict", async 
       400,
     );
   }
+  t.done();
+});
+
+Deno.test("/goals: save, show, clear, caps; PUT cannot erase or set them", async () => {
+  const t = await setup();
+  await t.hook(msg(1, 42, { text: "/goals" }));
+  assertEq(t.sent().at(-1)!.startsWith("No goals yet"), true);
+  await t.hook(msg(2, 42, { text: "/goals\nWin the hackathon\nShip a daily tool" }));
+  assertEq(t.sent().at(-1), "Saved 2 goals.");
+  await t.hook(msg(3, 42, { text: "/goals" }));
+  assertEq(t.sent().at(-1), "Your goals (2):\nWin the hackathon\nShip a daily tool");
+  await t.api("/api/profile", "PUT", { vibe: "hype", goals: ["Hacked"], traits: {} });
+  const got = await (await t.api("/api/profile")).json();
+  assertEq(got.goals, ["Win the hackathon", "Ship a daily tool"]);
+  assertEq(got.vibe, "hype");
+  await t.hook(msg(4, 42, { text: "/goals\n1\n2\n3\n4\n5\n6" }));
+  assertEq(t.sent().at(-1)!.startsWith("Not saved"), true);
+  await t.hook(msg(5, 42, { text: "/goals " + "x".repeat(301) }));
+  assertEq(t.sent().at(-1)!.startsWith("Not saved"), true);
+  assertEq((await (await t.api("/api/profile")).json()).goals.length, 2);
+  await t.hook(msg(6, 42, { text: "/goals clear" }));
+  assertEq((await (await t.api("/api/profile")).json()).goals, []);
+  assertEq(t.calls.filter((c) => c.url === ENV.ROUTINE_FIRE_URL).length, 0);
+  await t.hook(msg(7, 999, { text: "/goals\nEvil" })); // stranger
+  assertEq((await (await t.api("/api/profile")).json()).goals, []);
   t.done();
 });
