@@ -13,5 +13,7 @@ Deno.serve(handler);
 // Expiry messages also run from cron where the platform supports it (Deno.cron is unstable);
 // otherwise they run on every webhook and every Mac poll.
 try {
-  if (typeof Deno.cron === "function") Deno.cron("mac-sweep", "*/10 * * * *", () => handler.sweep());
+  if (typeof Deno.cron === "function") {
+    Deno.cron("mac-sweep", "*/10 * * * *", () => handler.sweep());
+  }
 } catch { /* no cron here */ }
