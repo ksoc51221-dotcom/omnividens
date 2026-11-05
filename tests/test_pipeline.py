@@ -183,10 +183,10 @@ def test_cleanup_never_touches_other_folders(tmp_path):
     assert keep.exists()
 
 
-def test_download_failure_asks_for_screen_recording(world):
+def test_download_failure_names_the_next_step(world):
     world.video_error = DownloadError("boom")
     world.say("1", "https://x.com/v")
-    assert "screen recording" in world.texts()[-1]
+    assert "video file" in world.texts()[-1]
     assert world.calls["check"] == []
 
 

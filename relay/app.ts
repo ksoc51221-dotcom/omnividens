@@ -16,6 +16,19 @@ const MAX_PROFILE = 64 * 1024;
 const MAX_PROJECT_LINES = 20;
 const MAX_PROJECT_LINE = 200;
 const DAY = 24 * 3600 * 1000;
+const MAC_ONLINE_MS = 3 * 60 * 1000;
+const LEASE_MS = 15 * 60 * 1000;
+const MAC_MAX_ATTEMPTS = 2;
+const MAC_JOB_TTL = DAY; // after this the user is told and the job dropped
+const MAC_KV_TTL = 2 * DAY; // KV entry outlives the logical expiry so a sweep can still tell the user
+const MAX_FRAMES = 20;
+const MAX_FRAME_BYTES = 50_000; // a Deno KV value maxes out at 64 KiB
+const MAX_TRANSCRIPT = 24_000; // chars; meta stays under 64 KiB even at 2 bytes a char
+const MAX_CAPTION = 3_000;
+const MAX_BUNDLE_BODY = 1_500_000;
+const BUNDLE_ID_RE = /^[\w-]{1,64}$/;
+const FAIL_REASONS = ["blocked", "rate_limited", "bad_link", "network", "too_long", "other"];
+const URL_RE = /https?:\/\/[^\s<>"')\]]+/i;
 const REQUIRED = [
   "TELEGRAM_BOT_TOKEN",
   "OWNER_TELEGRAM_ID",
@@ -47,7 +60,9 @@ const json = (data: unknown, status = 200) =>
   });
 const text = (s: string, status: number) => new Response(s, { status });
 
-export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
+export type Handler = ((req: Request) => Promise<Response>) & { sweep: () => Promise<void> };
+
+export function makeHandler(deps: Deps): Handler {
   const { env, kv } = deps;
   const token = () => env("TELEGRAM_BOT_TOKEN") ?? "";
 
@@ -103,6 +118,7 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
       return text("ok", 200);
     }
     if (typeof u?.update_id !== "number") return text("ok", 200);
+    await sweep().catch(() => {}); // expired Mac jobs get their message even without cron
     const fresh = await kv.atomic().check({ key: ["upd", u.update_id], versionstamp: null })
       .set(["upd", u.update_id], 1, { expireIn: DAY }).commit();
     if (!fresh.ok) return text("ok", 200);
@@ -164,6 +180,43 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
     await say(chat, `Saved ${lines.length} project${lines.length === 1 ? "" : "s"}.`);
   }
 
+  // Per-hour cap on routine fires, shared by Telegram messages and Mac bundles.
+  async function takeRateSlot(): Promise<boolean> {
+    const hour = Math.floor(deps.now() / 3600000);
+    const key = ["rate", hour];
+    const max = Number(env("MAX_RUNS_PER_HOUR")) || 20;
+    for (;;) { // check-and-set so two messages at once can't both slip under the cap
+      const cur = await kv.get<number>(key);
+      const n = cur.value ?? 0;
+      if (n >= max) return false;
+      const res = await kv.atomic().check(cur).set(key, n + 1, { expireIn: 2 * 3600 * 1000 })
+        .commit();
+      if (res.ok) return true;
+    }
+  }
+
+  // 0 = fired, >0 = HTTP status, -1 = unreachable.
+  async function fireRoutine(job: Json): Promise<number> {
+    let code = 0;
+    try {
+      const r = await deps.fetch(env("ROUTINE_FIRE_URL")!, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${env("ROUTINE_TOKEN")}`,
+          "anthropic-beta": "experimental-cc-routine-2026-04-01",
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ text: JSON.stringify(job) }),
+      });
+      if (!r.ok) code = r.status;
+      await r.body?.cancel();
+    } catch {
+      code = -1;
+    }
+    return code;
+  }
+
   async function ownerMessage(msg: Json, updateId: number, origin: string) {
     const chat: number = msg.chat.id;
     const files = [msg.video, msg.document, msg.animation].filter((f) => f?.file_id);
@@ -185,17 +238,7 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
       }
     }
 
-    const hour = Math.floor(deps.now() / 3600000);
-    const key = ["rate", hour];
-    const max = Number(env("MAX_RUNS_PER_HOUR")) || 20;
-    for (;;) { // check-and-set so two messages at once can't both slip under the cap
-      const cur = await kv.get<number>(key);
-      const n = cur.value ?? 0;
-      if (n >= max) return void await say(chat, "Busy, try again later");
-      const res = await kv.atomic().check(cur).set(key, n + 1, { expireIn: 2 * 3600 * 1000 })
-        .commit();
-      if (res.ok) break;
-    }
+    if (!(await takeRateSlot())) return void await say(chat, "Busy, try again later");
 
     await say(chat, "Got it. Takes a few minutes.");
     const f = files.sort((a, b) => (b.file_size ?? 0) - (a.file_size ?? 0))[0];
@@ -210,23 +253,7 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
         : null,
       relay_url: origin,
     };
-    let code = 0;
-    try {
-      const r = await deps.fetch(env("ROUTINE_FIRE_URL")!, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${env("ROUTINE_TOKEN")}`,
-          "anthropic-beta": "experimental-cc-routine-2026-04-01",
-          "anthropic-version": "2023-06-01",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ text: JSON.stringify(job) }),
-      });
-      if (!r.ok) code = r.status;
-      await r.body?.cancel();
-    } catch {
-      code = -1;
-    }
+    const code = await fireRoutine(job);
     if (code) {
       await say(
         chat,
@@ -237,11 +264,285 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
     }
   }
 
+  // ---- Mac fallback queue ----
+  // KV: ["mac","job",update_id] -> MacJob, ["mac","seen"] -> ms, ["mac","bundle",id,"meta"|"frame",i].
+  interface MacJob {
+    job: Json;
+    created: number;
+    attempts: number;
+    lease_until: number;
+    lease: string;
+    state: "queued" | "ready";
+    bundle_id?: string;
+  }
+  const jobKey = (u: number) => ["mac", "job", u];
+
+  function linkOf(job: Json): string {
+    return URL_RE.exec(String(job?.text ?? ""))?.[0].replace(/[.,;:!?]+$/, "").slice(0, 300) ??
+      "your video";
+  }
+
+  function seenText(ms: number | null): string {
+    return ms ? new Date(ms).toISOString().slice(0, 16).replace("T", " ") + " UTC" : "never";
+  }
+
+  async function macSeen(): Promise<number | null> {
+    return (await kv.get<number>(["mac", "seen"])).value;
+  }
+
+  // Fire the routine for a job whose bundle is stored. Told-the-user either way; returns true if the job is finished.
+  async function fireReady(rec: MacJob): Promise<boolean> {
+    if (!(await takeRateSlot())) return false; // keep it; the next sweep tries again
+    const code = await fireRoutine({ ...rec.job, bundle_id: rec.bundle_id });
+    if (code) {
+      await say(
+        rec.job.chat_id,
+        `Your Mac fetched ${
+          linkOf(rec.job)
+        }, but I could not start the analysis. Send the link again.`,
+      );
+    }
+    await kv.delete(jobKey(rec.job.update_id));
+    return true;
+  }
+
+  // Expiry and lease give-up. Runs on every webhook, every worker poll and (if the platform has it) cron.
+  async function sweep(): Promise<void> {
+    const now = deps.now();
+    for await (const e of kv.list<MacJob>({ prefix: ["mac", "job"] })) {
+      const rec = e.value;
+      if (now - rec.created >= MAC_JOB_TTL) {
+        await kv.delete(e.key);
+        await say(
+          rec.job.chat_id,
+          `I couldn't run ${linkOf(rec.job)} because your Mac wasn't online for 24 hours. ` +
+            "Send the link again and I'll retry.",
+        );
+      } else if (rec.state === "ready") {
+        await fireReady(rec);
+      } else if (rec.lease_until && rec.lease_until <= now && rec.attempts >= MAC_MAX_ATTEMPTS) {
+        await kv.delete(e.key);
+        await say(
+          rec.job.chat_id,
+          `Your Mac started ${linkOf(rec.job)} twice but never finished it. ` +
+            "Send the link again when it's awake.",
+        );
+      }
+    }
+  }
+
+  // RELAY_SECRET: the routine hands a blocked link job to the Mac queue.
+  async function defer(req: Request): Promise<Response> {
+    if (req.method !== "POST") return text("method not allowed", 405);
+    const b = await req.json().catch(() => null);
+    const j = b?.job;
+    const owner = (env("OWNER_TELEGRAM_ID") ?? "").trim();
+    if (
+      j?.v !== 1 || typeof j.update_id !== "number" || typeof j.chat_id !== "number" ||
+      typeof j.text !== "string" || j.bundle_id !== undefined || j.file
+    ) return json({ error: "bad request" }, 400);
+    if (!owner || String(j.chat_id) !== owner) return json({ error: "not the owner" }, 403);
+    if (!env("MAC_SECRET")) return json({ queued: false, reason: "no_mac" });
+    const clean = {
+      v: 1,
+      update_id: j.update_id,
+      chat_id: j.chat_id,
+      message_id: typeof j.message_id === "number" ? j.message_id : 0,
+      text: j.text.slice(0, 4000),
+      file: null,
+      relay_url: typeof j.relay_url === "string" ? j.relay_url : "",
+    };
+    const rec: MacJob = {
+      job: clean,
+      created: deps.now(),
+      attempts: 0,
+      lease_until: 0,
+      lease: "",
+      state: "queued",
+    };
+    const put = await kv.atomic().check({ key: jobKey(clean.update_id), versionstamp: null })
+      .set(jobKey(clean.update_id), rec, { expireIn: MAC_KV_TTL }).commit();
+    if (!put.ok) return json({ queued: true, duplicate: true });
+    const seen = await macSeen();
+    const online = seen !== null && deps.now() - seen < MAC_ONLINE_MS;
+    await say(
+      clean.chat_id,
+      online
+        ? "YouTube blocks downloads from the cloud, so your Mac is fetching this one. Your report follows in a few minutes."
+        : `YouTube blocks downloads from the cloud, and your Mac isn't online (last seen ${
+          seenText(seen)
+        }). I'll keep this for 24 hours and run it when your Mac is awake.`,
+    );
+    return json({ queued: true, online });
+  }
+
+  // RELAY_SECRET: the routine reads the Mac's upload.
+  async function bundleGet(id: string): Promise<Response> {
+    if (!BUNDLE_ID_RE.test(id)) return json({ error: "bad id" }, 400);
+    const meta = (await kv.get<Json>(["mac", "bundle", id, "meta"])).value;
+    if (!meta) return json({ error: "not found" }, 404);
+    const frames: Json[] = [];
+    for (let i = 0; i < meta.times.length; i++) {
+      const v = (await kv.get<Uint8Array>(["mac", "bundle", id, "frame", i])).value;
+      if (!v) return json({ error: "incomplete" }, 404);
+      frames.push({ time_s: meta.times[i], jpeg_b64: encodeBase64(v) });
+    }
+    return json({
+      meta: {
+        duration_s: meta.duration_s,
+        transcript: meta.transcript,
+        caption: meta.caption,
+      },
+      frames,
+    });
+  }
+
+  function encodeBase64(b: Uint8Array): string {
+    let s = "";
+    for (let i = 0; i < b.length; i += 0x8000) {
+      s += String.fromCharCode(...b.subarray(i, i + 0x8000));
+    }
+    return btoa(s);
+  }
+
+  function decodeBase64(s: string): Uint8Array | null {
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(s) || s.length % 4) return null;
+    try {
+      return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+    } catch {
+      return null;
+    }
+  }
+
+  // MAC_SECRET: the worker routes. This secret opens nothing else, and RELAY_SECRET opens none of these.
+  async function macApi(req: Request, path: string): Promise<Response> {
+    const secret = env("MAC_SECRET");
+    const auth = req.headers.get("authorization") ?? "";
+    if (!secret || !(await safeEqual(auth, `Bearer ${secret}`))) return text("unauthorized", 401);
+    const now = deps.now();
+    await kv.set(["mac", "seen"], now, { expireIn: 30 * DAY });
+    await sweep();
+
+    if (path === "/api/mac/next") {
+      if (req.method !== "GET") return text("method not allowed", 405);
+      for (;;) { // oldest first; claim with a check-and-set so a double poll can't claim twice
+        let pick: Deno.KvEntry<MacJob> | null = null;
+        for await (const e of kv.list<MacJob>({ prefix: ["mac", "job"] })) {
+          const r = e.value;
+          if (r.state === "queued" && r.lease_until <= now && r.attempts < MAC_MAX_ATTEMPTS) {
+            pick = e;
+            break;
+          }
+        }
+        if (!pick) return new Response(null, { status: 204 });
+        const rec = {
+          ...pick.value,
+          attempts: pick.value.attempts + 1,
+          lease_until: now + LEASE_MS,
+          lease: deps.randomId(),
+        };
+        const res = await kv.atomic().check(pick).set(pick.key, rec, { expireIn: MAC_KV_TTL })
+          .commit();
+        if (res.ok) {
+          return json({
+            update_id: rec.job.update_id,
+            lease: rec.lease,
+            attempt: rec.attempts,
+            job: rec.job,
+          });
+        }
+      }
+    }
+
+    if (req.method !== "POST") return text("method not allowed", 405);
+    if (path !== "/api/mac/bundle" && path !== "/api/mac/fail") return text("not found", 404);
+    const raw = new Uint8Array(await req.arrayBuffer());
+    if (raw.length > MAX_BUNDLE_BODY) return json({ error: "too large" }, 413);
+    let b: Json;
+    try {
+      b = JSON.parse(new TextDecoder().decode(raw));
+    } catch {
+      return json({ error: "invalid JSON" }, 400);
+    }
+    if (typeof b?.update_id !== "number" || typeof b?.lease !== "string") {
+      return json({ error: "bad request" }, 400);
+    }
+    const cur = await kv.get<MacJob>(jobKey(b.update_id));
+    const rec = cur.value;
+    if (!rec || !rec.lease || !(await safeEqual(rec.lease, b.lease)) || rec.state !== "queued") {
+      return json({ error: "no such lease" }, 409);
+    }
+
+    if (path === "/api/mac/fail") {
+      const reason = FAIL_REASONS.includes(b.reason) ? b.reason : "other";
+      const host = typeof b.host === "string"
+        ? b.host.replace(/[^A-Za-z0-9.-]/g, "").slice(0, 60)
+        : "";
+      const link = linkOf(rec.job);
+      const why: Record<string, string> = {
+        blocked: "YouTube's bot check blocked your Mac too",
+        rate_limited: "the site is rate limiting downloads from your Mac right now",
+        bad_link: "the link is private, removed or not supported",
+        network: `your Mac couldn't reach ${host || "that site"}`,
+        too_long: "the video is over the 10 minute limit",
+        other: "your Mac couldn't download it",
+      };
+      await kv.delete(cur.key);
+      await say(
+        rec.job.chat_id,
+        `I couldn't get ${link}: ${why[reason]}. Send the video file instead, or try again later.`,
+      );
+      return json({ ok: true });
+    }
+
+    // bundle
+    const m = b.meta, fr = b.frames;
+    if (!m || typeof m !== "object" || !Array.isArray(fr) || !fr.length || fr.length > MAX_FRAMES) {
+      return json({ error: "bad bundle" }, 400);
+    }
+    const bytes: Uint8Array[] = [], times: number[] = [];
+    for (const f of fr) {
+      const d = typeof f?.jpeg_b64 === "string" && f.jpeg_b64.length <= MAX_FRAME_BYTES * 2
+        ? decodeBase64(f.jpeg_b64)
+        : null;
+      if (
+        !d || typeof f.time_s !== "number" || !Number.isFinite(f.time_s) || f.time_s < 0 ||
+        f.time_s >= 3600 || d[0] !== 0xff || d[1] !== 0xd8 || d[2] !== 0xff
+      ) return json({ error: "bad frame" }, 400);
+      if (d.length > MAX_FRAME_BYTES) return json({ error: "frame too large" }, 413);
+      bytes.push(d);
+      times.push(f.time_s);
+    }
+    const id = deps.randomId();
+    const meta = {
+      times,
+      duration_s: typeof m.duration_s === "number" && Number.isFinite(m.duration_s)
+        ? m.duration_s
+        : 0,
+      transcript: typeof m.transcript === "string" ? m.transcript.slice(0, MAX_TRANSCRIPT) : "",
+      caption: typeof m.caption === "string" ? m.caption.slice(0, MAX_CAPTION) : "",
+    };
+    for (let i = 0; i < bytes.length; i++) {
+      await kv.set(["mac", "bundle", id, "frame", i], bytes[i], { expireIn: DAY });
+    }
+    await kv.set(["mac", "bundle", id, "meta"], meta, { expireIn: DAY });
+    const ready: MacJob = { ...rec, state: "ready", bundle_id: id };
+    await kv.set(cur.key, ready, { expireIn: MAC_KV_TTL });
+    const fired = await fireReady(ready);
+    return json({ ok: true, fired });
+  }
+
   // ---- Routine API ----
   async function api(req: Request, path: string): Promise<Response> {
     const secret = env("RELAY_SECRET");
     const auth = req.headers.get("authorization") ?? "";
     if (!secret || !(await safeEqual(auth, `Bearer ${secret}`))) return text("unauthorized", 401);
+
+    if (path === "/api/defer") return await defer(req);
+    if (path.startsWith("/api/bundle/")) {
+      if (req.method !== "GET") return text("method not allowed", 405);
+      return await bundleGet(path.slice("/api/bundle/".length));
+    }
 
     if (path === "/api/send") {
       if (req.method !== "POST") return text("method not allowed", 405);
@@ -343,7 +644,7 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
     return text("not found", 404);
   }
 
-  return async (req) => {
+  const handler = async (req: Request): Promise<Response> => {
     const url = new URL(req.url);
     const path = url.pathname;
     try {
@@ -355,10 +656,12 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
         // 200 even on internal errors: the update is already deduped, so a retry would be dropped.
         return await telegram(req).catch(() => text("ok", 200));
       }
+      if (path.startsWith("/api/mac/")) return await macApi(req, path);
       if (path.startsWith("/api/")) return await api(req, path);
       return text("not found", 404);
     } catch {
       return text("error", 500);
     }
   };
+  return Object.assign(handler, { sweep });
 }

@@ -13,6 +13,7 @@ from urllib.parse import quote, urlparse
 
 MAX_FILE_BYTES = 20 * 1024 * 1024
 TIMEOUT_S = 60
+MAX_BUNDLE_BYTES = 2 * 1024 * 1024
 
 
 class RelayError(Exception):
@@ -90,3 +91,21 @@ class Relay:
     def put_profile(self, profile: dict) -> None:
         with self._request("PUT", "/api/profile", profile):
             pass
+
+    def defer(self, job: dict) -> dict:
+        """Ask the relay to queue a blocked link job for the owner's Mac. The relay tells the user."""
+        with self._request("POST", "/api/defer", {"job": job}) as resp:
+            data = json.loads(resp.read(10_000))
+        return data if isinstance(data, dict) else {}
+
+    def get_bundle(self, bundle_id: str) -> dict:
+        """The Mac's upload: {meta, frames:[{time_s, jpeg_b64}]}. Untrusted until prepare validates it."""
+        with self._request("GET", "/api/bundle/" + quote(bundle_id, safe="")) as resp:
+            raw = resp.read(MAX_BUNDLE_BYTES + 1)
+        try:
+            data = json.loads(raw) if len(raw) <= MAX_BUNDLE_BYTES else None
+        except ValueError:
+            data = None
+        if data is None:
+            raise RelayError("the Mac's upload was unreadable")
+        return data if isinstance(data, dict) else {}

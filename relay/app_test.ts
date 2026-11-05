@@ -18,6 +18,7 @@ interface Call {
 
 async function setup(env: Record<string, string> = ENV, fire = 200) {
   const kv = await Deno.openKv(":memory:");
+  const clock = { t: 3600000 * 100 };
   const calls: Call[] = [];
   let ids = 0;
   const fakeFetch = (input: string | URL | Request, init?: RequestInit) => {
@@ -40,7 +41,7 @@ async function setup(env: Record<string, string> = ENV, fire = 200) {
     env: (n) => env[n],
     kv,
     fetch: fakeFetch as typeof fetch,
-    now: () => 3600000 * 100,
+    now: () => clock.t,
     randomId: () => `id${++ids}`,
   });
   const hook = (update: unknown, secret = "whsec") =>
@@ -63,8 +64,10 @@ async function setup(env: Record<string, string> = ENV, fire = 200) {
           : JSON.stringify(body),
       }),
     );
+  const mac = (path: string, method = "GET", body?: unknown, auth = "Bearer macsec") =>
+    api(path, method, body, auth);
   const sent = () => calls.filter((c) => c.url.endsWith("/sendMessage")).map((c) => c.body.text);
-  return { handler, kv, calls, hook, api, sent, done: () => kv.close() };
+  return { handler, kv, calls, hook, api, sent, clock, mac, done: () => kv.close() };
 }
 
 const msg = (id: number, from: number, extra: object = { text: "hi" }) => ({
@@ -379,4 +382,236 @@ Deno.test("adopt note is shown above the clone line; ADOPT_RE is strict", async 
     );
   }
   t.done();
+});
+
+// ---- Mac fallback ----
+const MENV = { ...ENV, MAC_SECRET: "macsec" };
+const JOB = {
+  v: 1,
+  update_id: 50,
+  chat_id: 42,
+  message_id: 7,
+  text: "see https://youtu.be/abc please",
+  file: null,
+  relay_url: "https://relay.example",
+};
+const jpeg = (n = 1000) => {
+  const b = new Uint8Array(n);
+  b.set([0xff, 0xd8, 0xff]);
+  return btoa(String.fromCharCode(...b));
+};
+const bundleBody = (u: number, lease: string, frames = 2, extra: object = {}) => ({
+  update_id: u,
+  lease,
+  meta: { duration_s: 30, transcript: "[0:01] hi", caption: "cap", ...extra },
+  frames: Array.from({ length: frames }, (_, i) => ({ time_s: i * 2, jpeg_b64: jpeg() })),
+});
+const fires = (t: Awaited<ReturnType<typeof setup>>) =>
+  t.calls.filter((c) => c.url === ENV.ROUTINE_FIRE_URL);
+
+Deno.test("secret scoping: MAC_SECRET only opens /api/mac, RELAY_SECRET never does", async () => {
+  const t = await setup(MENV);
+  assertEq((await t.mac("/api/mac/next", "GET", undefined, "Bearer relsec")).status, 401);
+  assertEq((await t.mac("/api/mac/next", "GET", undefined, "")).status, 401);
+  for (const p of ["/api/profile", "/api/file/x", "/api/defer", "/api/bundle/abc"]) {
+    assertEq((await t.api(p, "GET", undefined, "Bearer macsec")).status, 401);
+  }
+  assertEq(
+    (await t.api("/api/send", "POST", { chat_id: 42, text: "x" }, "Bearer macsec")).status,
+    401,
+  );
+  assertEq((await t.mac("/api/mac/next")).status, 204);
+  t.done();
+});
+
+Deno.test("MAC_SECRET unset: worker routes closed, defer says not queued", async () => {
+  const t = await setup();
+  assertEq((await t.mac("/api/mac/next", "GET", undefined, "Bearer ")).status, 401);
+  assertEq((await t.mac("/api/mac/next", "GET", undefined, "Bearer undefined")).status, 401);
+  const r = await (await t.api("/api/defer", "POST", { job: JOB })).json();
+  assertEq(r.queued, false);
+  t.done();
+});
+
+Deno.test("defer: Mac never seen -> offline message; seen <3 min -> online message", async () => {
+  const t = await setup(MENV);
+  assertEq((await t.api("/api/defer", "POST", { job: JOB })).status, 200);
+  assertEq(t.sent().length, 1);
+  if (!t.sent()[0].includes("isn't online (last seen never)")) throw new Error(t.sent()[0]);
+  await t.mac("/api/mac/next"); // heartbeat
+  await t.api("/api/defer", "POST", { job: { ...JOB, update_id: 51 } });
+  assertEq(
+    t.sent()[1],
+    "YouTube blocks downloads from the cloud, so your Mac is fetching this one. Your report follows in a few minutes.",
+  );
+  t.clock.t += 4 * 60 * 1000; // heartbeat is now stale
+  await t.api("/api/defer", "POST", { job: { ...JOB, update_id: 52 } });
+  if (!/last seen \d{4}-\d\d-\d\d \d\d:\d\d UTC/.test(t.sent()[2])) throw new Error(t.sent()[2]);
+  t.done();
+});
+
+Deno.test("defer: one queued job per update_id, no loops, owner only", async () => {
+  const t = await setup(MENV);
+  assertEq((await (await t.api("/api/defer", "POST", { job: JOB })).json()).queued, true);
+  const again = await (await t.api("/api/defer", "POST", { job: JOB })).json();
+  assertEq(again.duplicate, true);
+  assertEq(t.sent().length, 1); // told once
+  assertEq((await t.api("/api/defer", "POST", { job: { ...JOB, bundle_id: "b1" } })).status, 400);
+  assertEq(
+    (await t.api("/api/defer", "POST", { job: { ...JOB, update_id: 9, chat_id: 7 } })).status,
+    403,
+  );
+  assertEq(
+    (await t.api("/api/defer", "POST", { job: { ...JOB, update_id: 9, file: { file_id: "f" } } }))
+      .status,
+    400,
+  );
+  t.done();
+});
+
+Deno.test("lease: claimed job is hidden for 15 min, comes back, gives up after two attempts", async () => {
+  const t = await setup(MENV);
+  await t.api("/api/defer", "POST", { job: JOB });
+  const first = await (await t.mac("/api/mac/next")).json();
+  assertEq([first.update_id, first.attempt], [50, 1]);
+  assertEq((await t.mac("/api/mac/next")).status, 204); // leased
+  t.clock.t += 16 * 60 * 1000; // Mac slept
+  const second = await (await t.mac("/api/mac/next")).json();
+  assertEq(second.attempt, 2);
+  if (second.lease === first.lease) throw new Error("lease not renewed");
+  // The old lease can no longer upload.
+  assertEq((await t.mac("/api/mac/bundle", "POST", bundleBody(50, first.lease))).status, 409);
+  t.clock.t += 16 * 60 * 1000;
+  assertEq((await t.mac("/api/mac/next")).status, 204); // gave up
+  if (
+    !t.sent().at(-1)!.includes("https://youtu.be/abc") ||
+    !t.sent().at(-1)!.includes("never finished")
+  ) {
+    throw new Error(t.sent().at(-1));
+  }
+  assertEq((await t.mac("/api/mac/next")).status, 204);
+  assertEq(fires(t).length, 0);
+  t.done();
+});
+
+Deno.test("oldest job is claimed first", async () => {
+  const t = await setup(MENV);
+  await t.api("/api/defer", "POST", { job: { ...JOB, update_id: 70 } });
+  await t.api("/api/defer", "POST", { job: { ...JOB, update_id: 60 } });
+  assertEq((await (await t.mac("/api/mac/next")).json()).update_id, 60);
+  assertEq((await (await t.mac("/api/mac/next")).json()).update_id, 70);
+  t.done();
+});
+
+Deno.test("bundle: stored per frame, fires routine with bundle_id, routine can read it back", async () => {
+  const t = await setup(MENV);
+  await t.api("/api/defer", "POST", { job: JOB });
+  const c = await (await t.mac("/api/mac/next")).json();
+  const r = await t.mac("/api/mac/bundle", "POST", bundleBody(50, c.lease, 3));
+  assertEq(r.status, 200);
+  assertEq(fires(t).length, 1);
+  const sentJob = JSON.parse(fires(t)[0].body.text);
+  assertEq(sentJob.update_id, 50);
+  assertEq(sentJob.text, JOB.text);
+  const id = sentJob.bundle_id;
+  const got = await (await t.api("/api/bundle/" + id)).json();
+  assertEq(got.frames.length, 3);
+  assertEq(got.meta.transcript, "[0:01] hi");
+  assertEq((await t.api("/api/bundle/" + id, "GET", undefined, "Bearer macsec")).status, 401);
+  assertEq((await t.api("/api/bundle/nope")).status, 404);
+  assertEq((await t.mac("/api/mac/next")).status, 204); // job finished and removed
+  // each frame is its own KV value, well under 64 KiB
+  const e = await t.kv.get<Uint8Array>(["mac", "bundle", id, "frame", 2]);
+  assertEq(e.value!.length, 1000);
+  t.done();
+});
+
+Deno.test("bundle size caps: 21 frames, 50 KB+ frame, non-JPEG, junk all rejected; long text trimmed", async () => {
+  const t = await setup(MENV);
+  await t.api("/api/defer", "POST", { job: JOB });
+  const c = await (await t.mac("/api/mac/next")).json();
+  assertEq((await t.mac("/api/mac/bundle", "POST", bundleBody(50, c.lease, 21))).status, 400);
+  assertEq((await t.mac("/api/mac/bundle", "POST", bundleBody(50, c.lease, 0))).status, 400);
+  const big = bundleBody(50, c.lease, 1);
+  big.frames[0].jpeg_b64 = jpeg(50_001);
+  assertEq((await t.mac("/api/mac/bundle", "POST", big)).status, 413);
+  const png = bundleBody(50, c.lease, 1);
+  png.frames[0].jpeg_b64 = btoa("\x89PNG....");
+  assertEq((await t.mac("/api/mac/bundle", "POST", png)).status, 400);
+  const junk = bundleBody(50, c.lease, 1);
+  junk.frames[0].jpeg_b64 = "!!!not base64";
+  assertEq((await t.mac("/api/mac/bundle", "POST", junk)).status, 400);
+  assertEq((await t.mac("/api/mac/bundle", "POST", "{not json")).status, 400);
+  assertEq(fires(t).length, 0);
+  const edge = bundleBody(50, c.lease, 20, { transcript: "x".repeat(100_000) });
+  edge.frames[0].jpeg_b64 = jpeg(50_000);
+  assertEq((await t.mac("/api/mac/bundle", "POST", edge)).status, 200);
+  const id = JSON.parse(fires(t)[0].body.text).bundle_id;
+  const meta = (await t.kv.get<{ transcript: string }>(["mac", "bundle", id, "meta"])).value!;
+  assertEq(meta.transcript.length, 24_000);
+  t.done();
+});
+
+Deno.test("bundle at the rate cap waits and fires on a later poll", async () => {
+  const t = await setup({ ...MENV, MAX_RUNS_PER_HOUR: "1" });
+  await t.hook(msg(1, 42)); // uses the only slot
+  await t.api("/api/defer", "POST", { job: JOB });
+  const c = await (await t.mac("/api/mac/next")).json();
+  assertEq(
+    (await (await t.mac("/api/mac/bundle", "POST", bundleBody(50, c.lease))).json()).fired,
+    false,
+  );
+  assertEq(fires(t).length, 1);
+  t.clock.t += 3600000; // next hour
+  await t.mac("/api/mac/next");
+  assertEq(fires(t).length, 2);
+  assertEq(JSON.parse(fires(t)[1].body.text).update_id, 50);
+  t.done();
+});
+
+Deno.test("fail: real cause reaches the user, job is removed", async () => {
+  const t = await setup(MENV);
+  await t.api("/api/defer", "POST", { job: JOB });
+  const c = await (await t.mac("/api/mac/next")).json();
+  const r = await t.mac("/api/mac/fail", "POST", {
+    update_id: 50,
+    lease: c.lease,
+    reason: "rate_limited",
+  });
+  assertEq(r.status, 200);
+  const m = t.sent().at(-1)!;
+  if (!m.includes("https://youtu.be/abc") || !m.includes("rate limiting")) throw new Error(m);
+  assertEq((await t.mac("/api/mac/next")).status, 204);
+  // wrong lease is refused
+  await t.api("/api/defer", "POST", { job: { ...JOB, update_id: 51 } });
+  await t.mac("/api/mac/next");
+  assertEq(
+    (await t.mac("/api/mac/fail", "POST", { update_id: 51, lease: "guess", reason: "blocked" }))
+      .status,
+    409,
+  );
+  t.done();
+});
+
+Deno.test("expiry: after 24 h the user is told, naming the link, on a webhook or a poll or sweep()", async () => {
+  for (const how of ["poll", "webhook", "sweep"]) {
+    const t = await setup(MENV);
+    await t.api("/api/defer", "POST", { job: JOB });
+    const before = t.sent().length;
+    t.clock.t += 23 * 3600 * 1000;
+    await t.handler.sweep();
+    assertEq(t.sent().length, before); // not yet
+    t.clock.t += 2 * 3600 * 1000;
+    if (how === "poll") await t.mac("/api/mac/next");
+    else if (how === "webhook") await t.hook(msg(99, 999));
+    else await t.handler.sweep();
+    const m = t.sent().at(-1)!;
+    if (!m.includes("https://youtu.be/abc") || !m.includes("Send the link again")) {
+      throw new Error(how + m);
+    }
+    await t.handler.sweep();
+    assertEq(t.sent().length, before + 1); // told once, then gone
+    assertEq((await t.mac("/api/mac/next")).status, 204);
+    t.done();
+  }
 });
