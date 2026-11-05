@@ -516,18 +516,6 @@ def test_skill_with_script_is_unsure_not_yes(fake, tmp_path):
     assert "Is it safe? UNSURE" in m[1] and "scripts/x.sh" in m[1]
 
 
-def test_setting_off_makes_code_bearing_repos_read_only(fake, tmp_path, monkeypatch):
-    from reelay.core import reports as r
-    relay, _ = fake
-    d = _mod_probe(tmp_path, ("SKILL.md",))
-    for setting, expect in ((True, True), (False, False)):
-        monkeypatch.setattr(r, "ADOPT_ALLOWED_WITH_CODE", setting)
-        relay.sent.clear()
-        run_report(relay, tmp_path)
-        assert (sent_reports(relay)[0][2] is not None) is expect
-        assert "UNSURE" in sent_reports(relay)[0][1]
-
-
 def test_code_free_skill_wording_and_no_overclaim(fake, tmp_path):
     relay, _ = fake
     _write_report_dir(tmp_path, verdict_with(rep()))

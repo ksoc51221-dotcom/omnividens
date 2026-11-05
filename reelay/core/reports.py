@@ -14,10 +14,9 @@ from reelay.sandbox.safety import find_problem
 
 TYPES = {"skill": "bot skill", "mod": "mod", "app": "full app"}  # fixed list; anything else is "unclear"
 ADOPT_TYPES = {"skill", "mod"}
-# A mod is code that runs on the user's machine, so a clean scan of a repo that contains code can never be
-# "YES". Owner decision pending: True keeps Adopt for a skill/mod with confirmed identity and file evidence
-# even when it contains code (UNSURE + warning); False makes that case read-only.
-ADOPT_ALLOWED_WITH_CODE = True
+# A mod is code that runs on the user's machine, so a clean scan of a repo that contains code is never "YES":
+# it is UNSURE with a warning, and (owner's decision) a skill/mod with confirmed identity and file evidence
+# still gets Adopt.
 VERDICTS = ("YES", "NO", "UNSURE")
 MAX_REPORTS = 9  # per video
 MAX_TEXT = 3800
@@ -253,12 +252,12 @@ def adopt_line(rep: CandidateReport) -> str | None:
     """The ONLY place a clone line is allowed. Never run by us.
 
     Needs a skill/mod backed by files, an exact repo confirmed by the video or the owner, and either safety
-    YES or (while ADOPT_ALLOWED_WITH_CODE) the one UNSURE case: a clean scan of a repo that contains code."""
+    YES or the one UNSURE case: a clean scan of a repo that contains code."""
     if rep.type not in ADOPT_TYPES or not rep.owner_repo or rep.name_only:
         return None
     if rep.safety == "YES" and not rep.has_code:
         return adopt_line_for(rep.url)
-    if rep.safety == "UNSURE" and rep.has_code and ADOPT_ALLOWED_WITH_CODE:
+    if rep.safety == "UNSURE" and rep.has_code:
         return adopt_line_for(rep.url)
     return None
 
