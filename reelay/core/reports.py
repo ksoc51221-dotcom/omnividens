@@ -79,6 +79,7 @@ class CandidateReport:
     commit: str | None = None  # the commit our own clone scanned
     model_safety: str = "UNSURE"  # what the model said; it can only lower the final verdict
     claim_matches: bool = False
+    scan_problem: str = ""  # what our own scan flagged; never the model's words
 
 
 def _usage(raw) -> dict:
@@ -262,6 +263,7 @@ def apply_gate(rep: CandidateReport, clone: Path | None, confirmed: set[str],
                 why = "It is too big to scan, so I only know what the README claims."
             elif problem:
                 scan, why = "high", f"The safety scan flagged it: {plain(problem, 140)}."
+                rep.scan_problem = plain(problem, 100).rstrip(".")
             elif code:
                 scan, rep.has_code, rep.code_paths = "code", True, code[:5]
                 why = ("It contains code that would run on your computer. I did not read or run it; read "
@@ -345,8 +347,17 @@ def _usage_lines(u: dict) -> str:
     return "; ".join([setup, _tokens_text(u), money])
 
 
+def unsafe_message(rep: CandidateReport) -> str:
+    # Only our scan's own finding or a fixed phrase: the model's reason may repeat hostile repo text.
+    found = f"the scan flagged it ({rep.scan_problem})" if rep.scan_problem else "the review found risky behaviour"
+    who = rep.owner_repo or plain(rep.name, 60)
+    return f"⛔ {who}: {found}. Don't install it. Nothing was installed."
+
+
 def format_report(rep: CandidateReport) -> tuple[str, str | None]:
     """(message text, clone line or None). Plain text only."""
+    if rep.safety == "NO":  # unsafe: one short message, no sections, no buttons, no clone line
+        return unsafe_message(rep), None
     line = adopt_line(rep)
     manual = manual_line(rep)
     ident = rep.owner_repo or "exact repo not confirmed"
