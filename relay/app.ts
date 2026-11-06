@@ -31,7 +31,12 @@ const MAX_CAPTION = 3_000;
 const MAX_BUNDLE_BODY = 1_500_000;
 const BUNDLE_ID_RE = /^[\w-]{1,64}$/;
 const FAIL_REASONS = ["blocked", "rate_limited", "bad_link", "network", "too_long", "other"];
-const URL_RE = /https?:\/\/[^\s<>"')\]]+/i;
+const URL_RE = /https?:\/\/[^\s<>"')\]]+/i; // same pattern as reelay/cloud/job.py, which reads the link
+const NO_LINK_REPLY = "Send me a video or a link to a Reel/TikTok/Short.";
+const NOT_VIDEO_REPLY =
+  "That file isn't a video. Send me a video or a link to a Reel/TikTok/Short.";
+const TOO_BIG_REPLY =
+  "That video is over the 20 MB limit for Telegram bots, so I can't open it. Send a link to it, or a shorter clip.";
 const REQUIRED = [
   "TELEGRAM_BOT_TOKEN",
   "OWNER_TELEGRAM_ID",
@@ -43,6 +48,12 @@ const REQUIRED = [
 
 // deno-lint-ignore no-explicit-any
 type Json = any;
+
+// Telegram may send no type, or a generic one, for a video sent as a file: let ffmpeg decide those.
+function isVideoFile(f: Json): boolean {
+  const mime = String(f?.mime_type ?? "").toLowerCase();
+  return !mime || mime === "application/octet-stream" || mime.startsWith("video/");
+}
 
 async function safeEqual(a: string, b: string): Promise<boolean> {
   const enc = new TextEncoder();
@@ -261,7 +272,8 @@ export function makeHandler(deps: Deps): Handler {
       );
     }
 
-    if (!files.length && /^\/report(@\w+)?(\s|$)/.test(text_.trim())) { // one repo, one routine run
+    const isReport = !files.length && /^\/report(@\w+)?(\s|$)/.test(text_.trim());
+    if (isReport) { // one repo, one routine run
       if (!/^\/report(@\w+)?\s+[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*$/.test(text_.trim())) {
         return void await say(
           chat,
@@ -270,10 +282,20 @@ export function makeHandler(deps: Deps): Handler {
       }
     }
 
+    // A routine run costs the owner's usage: start one only if it has something it can work on.
+    const videos = files.filter(isVideoFile);
+    const usable = videos.filter((v) => (v.file_size ?? 0) <= MAX_FILE);
+    if (!isReport && !usable.length && !URL_RE.test(text_)) {
+      return void await say(
+        chat,
+        videos.length ? TOO_BIG_REPLY : files.length ? NOT_VIDEO_REPLY : NO_LINK_REPLY,
+      );
+    }
+
     if (!(await takeRateSlot())) return void await say(chat, "Busy, try again later");
 
     await say(chat, "Got it. Takes a few minutes.");
-    const f = files.sort((a, b) => (b.file_size ?? 0) - (a.file_size ?? 0))[0];
+    const f = usable.sort((a, b) => (b.file_size ?? 0) - (a.file_size ?? 0))[0];
     const job = {
       v: 1,
       update_id: updateId,

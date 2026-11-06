@@ -76,7 +76,7 @@ async function setup(env: Record<string, string> = ENV, fire = 200) {
   return { handler, kv, calls, hook, api, sent, clock, mac, hooks, defer, done: () => kv.close() };
 }
 
-const msg = (id: number, from: number, extra: object = { text: "hi" }) => ({
+const msg = (id: number, from: number, extra: object = { text: "https://x.com/a/status/1" }) => ({
   update_id: id,
   message: { message_id: 7, from: { id: from }, chat: { id: from }, ...extra },
 });
@@ -149,9 +149,63 @@ Deno.test("fire request has exact headers and body shape", async () => {
 
 Deno.test("text is capped at 4000 chars", async () => {
   const t = await setup();
-  await t.hook(msg(1, 42, { text: "x".repeat(5000) }));
+  await t.hook(msg(1, 42, { text: "https://x.com/" + "x".repeat(5000) }));
   const fire = t.calls.find((c) => c.url === ENV.ROUTINE_FIRE_URL)!;
   assertEq(JSON.parse(fire.body.text).text.length, 4000);
+  t.done();
+});
+
+Deno.test("text with nothing to work on answers without a run or a rate slot", async () => {
+  const t = await setup({ ...ENV, MAX_RUNS_PER_HOUR: "1" });
+  for (const [i, text] of ["/start", "hello", "/vibe"].entries()) {
+    await t.hook(msg(i + 1, 42, { text }));
+    assertEq(t.sent().at(-1), "Send me a video or a link to a Reel/TikTok/Short.");
+  }
+  assertEq(fires(t).length, 0);
+  await t.hook(msg(9, 42)); // the one slot in this hour is still free
+  assertEq(fires(t).length, 1);
+  t.done();
+});
+
+Deno.test("a video over 20 MB answers without a run", async () => {
+  const t = await setup();
+  await t.hook(msg(1, 42, {
+    video: { file_id: "big", file_size: 50_000_000, mime_type: "video/mp4" },
+  }));
+  assertEq(fires(t).length, 0);
+  assertEq(t.sent().length, 1);
+  assertEq(t.sent()[0].includes("20 MB"), true);
+  t.done();
+});
+
+Deno.test("a file that isn't a video answers without a run", async () => {
+  const t = await setup();
+  await t.hook(msg(1, 42, {
+    document: { file_id: "d", file_size: 1000, mime_type: "application/pdf" },
+  }));
+  assertEq(fires(t).length, 0);
+  assertEq(t.sent()[0].includes("isn't a video"), true);
+  t.done();
+});
+
+Deno.test("an unusable file with a link in its caption runs on the link", async () => {
+  const t = await setup();
+  await t.hook(msg(1, 42, {
+    caption: "see https://x.com/a/status/1",
+    video: { file_id: "big", file_size: 50_000_000, mime_type: "video/mp4" },
+  }));
+  const fire = t.calls.find((c) => c.url === ENV.ROUTINE_FIRE_URL)!;
+  assertEq(JSON.parse(fire.body.text).file, null);
+  t.done();
+});
+
+Deno.test("a video sent as a file with a generic type still runs", async () => {
+  const t = await setup();
+  await t.hook(msg(1, 42, {
+    document: { file_id: "d", file_size: 1000, mime_type: "application/octet-stream" },
+  }));
+  const fire = t.calls.find((c) => c.url === ENV.ROUTINE_FIRE_URL)!;
+  assertEq(JSON.parse(fire.body.text).file.file_id, "d");
   t.done();
 });
 

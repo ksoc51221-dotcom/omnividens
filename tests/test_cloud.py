@@ -426,6 +426,24 @@ def test_identity_must_come_from_the_video_or_the_owner(fake, tmp_path):
     assert sent_reports(relay)[0][2] == "git clone -- https://github.com/foo/bar"
 
 
+def test_report_command_works_with_the_exact_shape_the_prompt_asks_for(fake, tmp_path):
+    prompt = (Path(__file__).parent.parent / "routine" / "PROMPT.md").read_text(encoding="utf-8")
+    assert 'write `verdict.json` with just `"reports": [that one object]`' in prompt  # no summary key
+    relay, _ = fake
+    _write_report_dir(tmp_path, {"reports": [rep()]}, links=[], owner_supplied=["foo/bar"])
+    run_report(relay, tmp_path)
+    assert len(relay.sent) == 1 and relay.sent[0][2] == "git clone -- https://github.com/foo/bar"
+    assert "Is it safe? YES" in relay.sent[0][1]
+
+
+def test_video_whose_summary_went_missing_keeps_its_reports(fake, tmp_path):
+    relay, _ = fake
+    _write_report_dir(tmp_path, {"reports": [rep()]})
+    run_report(relay, tmp_path)
+    assert "couldn't fact-check" in relay.sent[0][1]  # honest about the missing summary
+    assert any("Is it safe?" in m[1] for m in relay.sent[1:])
+
+
 def test_report_command_repo_counts_as_confirmed_and_sends_one_message(fake, tmp_path):
     relay, _ = fake
     _write_report_dir(tmp_path, verdict_with(rep(), rep("o", "https://github.com/o/other")), links=[],

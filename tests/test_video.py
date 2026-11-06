@@ -9,7 +9,7 @@ import pytest
 from reelay.video import BadLinkError, BlockedError, RateLimitedError, VideoError, DownloadError, FrameError, NetworkError, TooLongError, load_video
 from reelay.video import download as dl
 from reelay.video import pipeline
-from reelay.video.frames import plan_times
+from reelay.video.frames import find_scene_cuts, plan_times
 from reelay.video.transcript import parse_vtt, read_subtitle
 
 needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg missing")
@@ -128,6 +128,40 @@ def test_filtered_download_raises_too_long(tmp_path, monkeypatch):
     with pytest.raises(TooLongError) as err:
         dl.download("https://example.com/v", tmp_path)
     assert "too long" in err.value.user_message
+
+
+@pytest.mark.parametrize("line", [
+    "[download] x does not pass filter (duration<=?600 & !is_live), skipping ..",
+    "[download] File is larger than max-filesize (31457280 bytes > 1024 bytes). Aborting.",
+])
+def test_too_long_is_found_on_stdout_where_ytdlp_prints_it(tmp_path, monkeypatch, line):
+    class Proc:
+        returncode, stdout, stderr = 0, line, ""
+    monkeypatch.setattr(dl, "_run_group", lambda *a, **k: Proc())
+    monkeypatch.setattr(dl, "is_private_host", lambda u: False)
+    with pytest.raises(TooLongError):
+        dl.download("https://example.com/v", tmp_path)
+
+
+def _clip(path, *meta):
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                    "-f", "lavfi", "-i", "color=red:d=1:s=64x64:r=10",
+                    "-f", "lavfi", "-i", "color=blue:d=1:s=64x64:r=10",
+                    "-filter_complex", "[0][1]concat=n=2:v=1", *meta, str(path)], check=True)
+    return path
+
+
+@needs_ffmpeg
+def test_scene_cuts_are_still_found_in_real_ffmpeg_output(tmp_path):
+    cuts = find_scene_cuts(_clip(tmp_path / "cut.mp4"))
+    assert len(cuts) == 1 and 0.8 <= cuts[0] <= 1.2
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("title", [b"title=caf\xe9\xff", b"title=pts_time:1.2.3", b"title=pts_time:99999"])
+def test_metadata_cannot_crash_or_fake_scene_cuts(tmp_path, title):
+    cuts = find_scene_cuts(_clip(tmp_path / "meta.mkv", b"-metadata", title))
+    assert len(cuts) == 1 and 0.8 <= cuts[0] <= 1.2
 
 
 def test_download_passes_caps_to_ytdlp(tmp_path, monkeypatch):

@@ -14,6 +14,7 @@ SCENE_THRESHOLD = 0.4
 PROBE_TIMEOUT_S = 30
 SCENE_TIMEOUT_S = 120
 FRAME_TIMEOUT_S = 30
+_SHOWINFO_TIME = re.compile(r"^\[Parsed_showinfo_\d+ @ [^\]]+\].*?\bpts_time:(\d+(?:\.\d+)?)", re.MULTILINE)
 
 
 def probe_duration(video: Path) -> float:
@@ -52,7 +53,8 @@ def find_scene_cuts(video: Path) -> list[float]:
          "-vf", f"select='gt(scene,{SCENE_THRESHOLD})',showinfo", "-an", "-f", "null", "-"],
         SCENE_TIMEOUT_S, capture_output=True, text=True,
     )
-    return [float(m) for m in re.findall(r"pts_time:([\d.]+)", proc.stderr)]
+    # stderr also holds the file's own metadata, which the video's author controls: only trust showinfo lines.
+    return [float(m) for m in _SHOWINFO_TIME.findall(proc.stderr)]
 
 
 def extract_frames(video: Path, out_dir: Path, interval: float = 2.0,

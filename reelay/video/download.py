@@ -93,7 +93,7 @@ def _network_error_line(stderr: str) -> str | None:
 def _run_group(cmd: list[str], timeout_s: int) -> subprocess.CompletedProcess:
     """Run in its own process group so a timeout also kills yt-dlp's ffmpeg children."""
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True, start_new_session=True)
+                            text=True, encoding="utf-8", errors="replace", start_new_session=True)
     try:
         out, err = proc.communicate(timeout=timeout_s)
     except subprocess.TimeoutExpired:
@@ -144,7 +144,8 @@ def _download(url: str, out_dir: Path, timeout_s: int) -> Downloaded:
     video = _find_video(out_dir)
     if video is None:
         err = proc.stderr or ""
-        if "does not pass filter" in err or "larger than max-filesize" in err:
+        said = f"{proc.stdout or ''}\n{err}"  # yt-dlp prints both skips on stdout and still exits 0
+        if "does not pass filter" in said or "larger than max-filesize" in said:
             raise TooLongError(f"video is over {MAX_DURATION_S // 60} min or {MAX_FILESIZE}")
         _raise_classified(err)
         net_line = _network_error_line(err)

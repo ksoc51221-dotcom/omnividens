@@ -17,7 +17,7 @@ from reelay.core import reports as _reports
 from reelay.sandbox.fetch import MAX_CLONE_BYTES, FetchError, check_url
 from reelay.sandbox.fetch import _size as fetch_size
 from reelay.core.types import Frame, Profile, Verdict, VideoBundle
-from reelay.factcheck.parse import extract_json, parse_verdict
+from reelay.factcheck.parse import extract_json, extract_reports_json, parse_verdict
 from reelay.profile.store import MAX_GOAL_LEN, MAX_GOALS, MAX_TRAIT_LEN, MAX_TRAITS, VIBES
 
 MAX_REPORT = 3800
@@ -165,7 +165,9 @@ def run(workdir: str, relay_factory=Relay, cloner=_hardened_clone) -> int:
         # (cited by the model, not resolved). Candidates are still fully checked inside parse_verdict.
         verdict = (parse_verdict(raw, bundle.duration_s, resolve_sources=False, stats=vstats)
                    if not repo_only else Verdict(summary="", claims=[]))
-        data = extract_json(raw) if raw else None
+        # Prefer the object holding `reports`: a /report job writes no summary, and a video whose
+        # summary went missing should still keep its reports.
+        data = (extract_reports_json(raw) or extract_json(raw)) if raw else None
         data = data if isinstance(data, dict) else {}
         reps, left = _build(data, verdict, _projects(prof_d.get("projects")))
         if repo_only:

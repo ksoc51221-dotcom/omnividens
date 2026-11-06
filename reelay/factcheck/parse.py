@@ -99,8 +99,16 @@ def good_url(url, cache: dict | None = None, resolve: bool = True) -> str | None
     return url if cache[host] else None
 
 
-def extract_json(raw: str):
-    """The first JSON object in the model's text that has a summary string.
+def _has_summary(obj: dict) -> bool:
+    return isinstance(obj.get("summary"), str) and bool(obj["summary"].strip())
+
+
+def _has_reports(obj: dict) -> bool:
+    return isinstance(obj.get("reports"), list) and bool(obj["reports"])
+
+
+def extract_json(raw: str, accept=_has_summary):
+    """The first JSON object in the model's text that `accept` likes (by default: has a summary string).
 
     The model may add chatter or a code fence around it, even text with its own braces
     ("here {as asked}: {...}"), so try to decode an object at every "{".
@@ -111,10 +119,15 @@ def extract_json(raw: str):
             obj, _ = decoder.raw_decode(raw, pos)
         except (json.JSONDecodeError, RecursionError):
             obj = None
-        if isinstance(obj, dict) and isinstance(obj.get("summary"), str) and obj["summary"].strip():
+        if isinstance(obj, dict) and accept(obj):
             return obj
         pos = raw.find("{", pos + 1)
     return None
+
+
+def extract_reports_json(raw: str):
+    """The first JSON object with a non-empty `reports` list. A `/report` job has no summary at all."""
+    return extract_json(raw, _has_reports)
 
 
 def _claim(item, duration_s: float, cache: dict, resolve: bool = True, stats: dict | None = None) -> Claim | None:
