@@ -297,4 +297,4 @@ def test_known_file_names_survive_but_links_do_not():
                  "see evil.com now", "pay.io", "a@b.com", "[t](https://e.com)",
                  "evil.ai", "evil.sh", "evil.cc", "evil.to", "my-install.sh", "evil.install.sh", "Evil.AI"):
         out = strip_urls(f"Visit {link} today")
-        assert "[link removed]" in out and "evil" not in out.lower() and "://" not in out, link
+        assert "link removed" not in out and "evil" not in out.lower() and "://" not in out, link

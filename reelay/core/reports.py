@@ -48,6 +48,40 @@ def plain(value, limit: int) -> str:
     return s if len(s) <= limit else s[:limit - 1] + "…"
 
 
+def plain_sentence(value, limit: int) -> str:
+    """Like plain(), but a too-long text is cut at the last sentence end inside the cap, or at a word
+    boundary with an ellipsis when there is none. Never mid-word."""
+    s = plain(value, 10 ** 6)
+    if len(s) <= limit:
+        return s
+    window = s[:limit]
+    ends = [m.end() for m in re.finditer(r"[.!?](?=\s|$)", window)]
+    if s[limit:limit + 1].isspace() and window[-1:] in ".!?":
+        ends.append(limit)
+    if ends:
+        return window[:max(ends)].strip()
+    cut = window[:limit - 1].rsplit(" ", 1)[0] if " " in window[:limit - 1] else window[:limit - 1]
+    return cut.rstrip(" ,;:-") + "…"
+
+
+def parse_not_found(raw) -> list[tuple[str, str]]:
+    """[(name, searched)] from verdict.json `not_found`: hostile input, plain capped strings, max 5."""
+    out = []
+    for item in (raw if isinstance(raw, list) else [])[:30]:
+        if len(out) >= 5:
+            break
+        if not isinstance(item, dict):
+            continue
+        name, searched = plain(item.get("name"), 60), plain(item.get("searched"), 80)
+        if name:
+            out.append((name, searched))
+    return out
+
+
+def not_found_line(name: str, searched: str) -> str:
+    return f"I couldn't find the repo for {name}" + (f" (searched: {searched})" if searched else "")
+
+
 def repo_parts(url) -> tuple[str, str] | None:
     m = _REPO.fullmatch(url) if isinstance(url, str) else None
     if not m or {m.group(1), m.group(2)} & {".", ".."} or m.group(2).lower().endswith(".git"):
@@ -132,7 +166,7 @@ def parse_report(raw, projects: list[str]) -> CandidateReport | None:
         name=name, url=url, type=typ, type_note=plain(raw.get("type_note"), 200), safety=safety,
         safety_reason=reason, owner_repo=owner_repo, name_only=True, model_safety=model_safety,
         claim_matches=claim_matches,
-        what=plain(info.get("what"), 400) or "No description was found.",
+        what=plain_sentence(info.get("what"), 400) or "No description was found.",
         impact=_impact(raw.get("impact"), projects), usage=_usage(raw.get("usage")))  # old pros/cons/etc. ignored
 
 
@@ -371,8 +405,11 @@ def format_report(rep: CandidateReport) -> tuple[str, str | None]:
         safe += " I recommend Skip."
     if rep.commit:
         ident += f" · scanned commit {rep.commit[:12]}"
-    lines += [safe, f"Repo: {ident}", "",
-              f"2. What it does: {rep.what}"]
+    lines += [safe, f"Repo: {ident}"]
+    if rep.name_only and rep.owner_repo and not (line or manual):
+        lines.append("I found this by searching, so I can't be sure it's the one in the video. If it is, "
+                     f"send /report {rep.owner_repo} and I'll check it as yours.")
+    lines += ["", f"2. What it does: {rep.what}"]
     lines += ["", f"3. Where it fits you: {rep.impact}", f"4. Usage: {_usage_lines(rep.usage)}"]
     if manual:
         lines.append(f"⚠️ This {TYPES[rep.type]} contains code that the scan can't judge. I did not read or run "
@@ -393,7 +430,7 @@ def format_report(rep: CandidateReport) -> tuple[str, str | None]:
 
 def format_factcheck(verdict: Verdict, tail: str = "", saw: str = "") -> str:
     """The short, separate fact-check message."""
-    lines = [plain(verdict.summary, 400) or "No summary."]
+    lines = [plain_sentence(verdict.summary, 400) or "No summary."]
     if verdict.claims:
         lines += ["", "Was the video telling the truth?"]
         for c in verdict.claims[:6]:

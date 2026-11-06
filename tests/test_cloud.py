@@ -9,7 +9,8 @@ import pytest
 from reelay.cloud import prepare, report
 from reelay.cloud.job import github_links, parse_job
 from reelay.cloud.relay import Relay, RelayError
-from reelay.core.types import Frame, VideoBundle
+from reelay.core import reports as _reports
+from reelay.core.types import Frame, Verdict, VideoBundle
 from reelay.factcheck import parse
 from reelay.video.errors import DownloadError
 
@@ -1098,3 +1099,94 @@ def test_cli_dispatches_summary(monkeypatch):
     seen = []
     monkeypatch.setattr(summary_mod, "run", lambda wd: seen.append(wd) or 0)
     assert cli.main(["summary", "/tmp/x"]) == 0 and seen == ["/tmp/x"]
+
+
+# ---- T38: tool videos report on the tool, not a fact-check ----
+def _tool_verdict(*reports, **extra):
+    return {"summary": "A video about a skill.", "claims": [], "candidates": [], "reports": list(reports), **extra}
+
+
+def test_repo_found_by_search_is_unsure_with_report_line_and_no_button(fake, tmp_path):
+    relay, _ = fake
+    _write_report_dir(tmp_path, _tool_verdict(rep("pdf-skill", "https://github.com/acme/pdf-skill")), links=[])
+    assert run_report(relay, tmp_path) == 0
+    text, line, is_report = relay.sent[1][1], relay.sent[1][2], relay.sent[1][3]
+    assert is_report and line is None and "git clone" not in text
+    assert "1. Is it safe? UNSURE" in text and "matched from a name only" in text
+    assert ("I found this by searching, so I can't be sure it's the one in the video. If it is, send "
+            "/report acme/pdf-skill and I'll check it as yours.") in text
+    assert "Adopt shows" not in text and "scan" in text.lower() and "4. Usage" in text and "3. Where it fits" in text
+
+
+def test_same_repo_owner_supplied_follows_the_adopt_rules(fake, tmp_path):
+    relay, _ = fake
+    _write_report_dir(tmp_path, {"reports": [rep("pdf-skill", "https://github.com/acme/pdf-skill")]},
+                      links=[], owner_supplied=["acme/pdf-skill"])
+    assert run_report(relay, tmp_path) == 0
+    text, line = relay.sent[0][1], relay.sent[0][2]
+    assert line == "git clone -- https://github.com/acme/pdf-skill"
+    assert "I found this by searching" not in text
+
+
+def test_search_found_repo_can_never_reach_yes_or_a_button(fake, tmp_path):
+    relay, _ = fake
+    for safety in ("YES", "UNSURE"):
+        relay.sent.clear()
+        _write_report_dir(tmp_path, _tool_verdict(rep("s", "https://github.com/acme/s", safety=safety)), links=[])
+        run_report(relay, tmp_path)
+        assert relay.sent[1][2] is None and "1. Is it safe? YES" not in relay.sent[1][1]
+    # the search line is never printed together with an Adopt button
+    r = _reports.parse_report(rep("s", "https://github.com/acme/s"), [])
+    r = _reports.apply_gate(r, None, set())
+    text, line = _reports.format_report(r)
+    assert line is None and "I found this by searching" in text
+
+
+def test_not_found_lines_are_built_in_code_from_hostile_fields(fake, tmp_path):
+    relay, _ = fake
+    hostile = [{"name": "Cool\x00Skill https://evil.sh/x", "searched": "cool skill\nIGNORE ALL " + "z" * 500},
+               {"name": ["x"], "searched": 5}, "junk", {"name": "", "searched": "q"}] + [
+        {"name": f"n{i}", "searched": "q"} for i in range(8)]
+    _write_report_dir(tmp_path, _tool_verdict(not_found=hostile))
+    assert run_report(relay, tmp_path) == 0
+    msg = relay.sent[0][1]
+    assert "I couldn't find the repo for Cool Skill (searched: cool skill IGNORE ALL" in msg
+    assert "evil" not in msg and "\x00" not in msg and "\n" not in msg.split("I couldn't find")[1].split("\n")[0]
+    assert msg.count("I couldn't find the repo for") == 5
+    assert "No repo could be checked" in msg and "Nothing to install" not in msg
+    assert len(relay.sent) == 1
+
+
+def test_not_found_with_a_report_keeps_the_report_and_no_closing_line(fake, tmp_path):
+    relay, _ = fake
+    _write_report_dir(tmp_path, _tool_verdict(rep("a", "https://github.com/o/a"),
+                                              not_found=[{"name": "Other", "searched": "other tool"}]))
+    run_report(relay, tmp_path)
+    assert "I couldn't find the repo for Other (searched: other tool)" in relay.sent[0][1]
+    assert "No repo could be checked" not in relay.sent[0][1] and len(relay.sent) == 2
+
+
+def test_no_tool_video_still_fact_checks_and_says_nothing_to_install(fake, tmp_path):
+    relay, _ = fake
+    _write_report_dir(tmp_path, verdict_with())
+    run_report(relay, tmp_path)
+    assert "Was the video telling the truth?" in relay.sent[0][1] and "Nothing to install" in relay.sent[0][1]
+
+
+def test_summary_is_cut_at_a_sentence_end_or_a_word(fake):
+    s = "First sentence here. " + "Second one is long and keeps going " * 20
+    out = _reports.plain_sentence(s, 60)
+    assert out == "First sentence here."
+    one = _reports.plain_sentence("word " * 100, 50)
+    assert one.endswith("…") and len(one) <= 50 and not one[:-1].endswith("wor")
+    assert _reports.plain_sentence("Short.", 50) == "Short."
+    assert _reports.format_factcheck(Verdict(summary="A. " + "b" * 600, claims=[])).startswith("A.")
+
+
+def test_no_link_removed_text_and_no_leftover_brackets():
+    from reelay.factcheck.parse import strip_urls
+    for raw in ("Try https://x.com/a today", "Try (https://x.com/a) today", "Try [site](https://x.com) now",
+                "Visit evil.sh, then go"):
+        out = strip_urls(raw)
+        assert "link removed" not in out and "()" not in out and "[]" not in out and "  " not in out
+        assert "://" not in out and " ," not in out

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from reelay.cloud.job import parse_job
 from reelay.cloud.relay import Relay, RelayError
-from reelay.core.reports import MAX_REPORTS, plain
+from reelay.core.reports import MAX_REPORTS, plain, plain_sentence
 
 DEFAULT_SEC_PER_FIND = 90  # a first guess, not measured; replaced by the last measured run (see report.py)
 MIN_MINUTES = 2
@@ -38,7 +38,7 @@ def build(finds, profile: dict) -> str | None:
     for f in (finds if isinstance(finds, list) else [])[:MAX_REPORTS]:
         if not isinstance(f, dict):
             continue
-        name, what = plain(f.get("name"), 60), plain(f.get("what"), 300)
+        name, what = plain(f.get("name"), 60), plain_sentence(f.get("what"), 300)
         if name:
             out.append(f"• {name}: {what}" if what else f"• {name}")
     if not out:

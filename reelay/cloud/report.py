@@ -173,6 +173,7 @@ def run(workdir: str, relay_factory=Relay, cloner=_hardened_clone) -> int:
         data = (extract_reports_json(raw) or extract_json(raw)) if raw else None
         data = data if isinstance(data, dict) else {}
         reps, left = _build(data, verdict, _projects(prof_d.get("projects")))
+        not_found = _reports.parse_not_found(data.get("not_found")) if not repo_only else []
         if repo_only:
             reps = [r for r in reps if r.owner_repo and r.owner_repo.lower() == supplied[0].lower()][:1]
             left = []
@@ -190,8 +191,12 @@ def run(workdir: str, relay_factory=Relay, cloner=_hardened_clone) -> int:
                 _reports.apply_gate(r, clone, confirmed, commit)
         sent, daily = 0, False
         if not repo_only:
+            tail = [_reports.not_found_line(n, s) for n, s in not_found]
+            if not reps and not left:
+                tail.append("Done. No repo could be checked." if not_found
+                            else "Done. Nothing to install in this one.")
             relay.send(job.chat_id, _reports.format_factcheck(
-                verdict, "" if reps or left else "Done. Nothing to install in this one.",
+                verdict, "\n".join(tail),
                 saw=saw_line(data.get("frames_viewed"), len(frames))))
             sent += 1
         elif not reps:
