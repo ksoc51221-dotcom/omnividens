@@ -107,8 +107,9 @@ export function makeHandler(deps: Deps): Handler {
     tg("sendMessage", { chat_id, text: t, ...extra });
 
   // This page is public, so opening it must never move the bot to whatever origin asked: a preview
-  // deployment or an arbitrary Host. Only an explicit PUBLIC_URL sets the webhook, and only to itself.
-  // Without one the page just reads Telegram's current state, so an existing webhook stays as it is.
+  // deployment or an arbitrary Host. The webhook is set only when this page is served from PUBLIC_URL,
+  // so a typo or a preview can't move the bot or change its secret. Anywhere else the page just reads
+  // Telegram's current state, so an existing webhook stays as it is.
   function publicUrl(): string | null {
     try {
       const u = new URL((env("PUBLIC_URL") ?? "").trim());
@@ -125,7 +126,7 @@ export function makeHandler(deps: Deps): Handler {
     const badUrl = !base && (env("PUBLIC_URL") ?? "").trim() !== "";
     let hook: "here" | "elsewhere" | "none" | "refused" = "refused";
     if (env("TELEGRAM_BOT_TOKEN") && env("WEBHOOK_SECRET")) {
-      if (base) {
+      if (base === origin) {
         const r = await tg("setWebhook", {
           url: `${base}/telegram`,
           secret_token: env("WEBHOOK_SECRET"),
@@ -148,6 +149,8 @@ export function makeHandler(deps: Deps): Handler {
           ? `<p>Missing environment variables: ${missing.join(", ")}</p>`
           : badUrl
           ? "<p>PUBLIC_URL must be this app's https address, for example https://my-app.deno.net</p>"
+          : base && base !== origin
+          ? "<p>PUBLIC_URL is a different address from this page, so the webhook was not changed. Open the page at that address, or correct PUBLIC_URL.</p>"
           : hook === "none"
           ? "<p>The Telegram webhook isn't set. Add PUBLIC_URL (this app's production https address) and reload this page once.</p>"
           : hook === "elsewhere"

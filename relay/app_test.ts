@@ -361,9 +361,16 @@ Deno.test("status page hides values, lists missing names, sets webhook", async (
 
 Deno.test("status page never re-points the webhook to the requesting origin", async () => {
   const t = await setup();
-  await t.handler(new Request("https://evil.example/"));
+  await t.handler(new Request("https://relay.example/"));
   const urls = t.calls.filter((c) => c.url.endsWith("/setWebhook")).map((c) => c.body.url);
   assertEq(urls, ["https://relay.example/telegram"]);
+  // Any other origin (preview, typo in PUBLIC_URL, arbitrary Host) writes nothing, not even to PUBLIC_URL:
+  // a preview with its own WEBHOOK_SECRET would otherwise lock the production bot out.
+  const other = await (await t.handler(new Request("https://evil.example/"))).text();
+  assertEq(t.calls.filter((c) => c.url.endsWith("/setWebhook")).length, 1);
+  assertEq(other.includes("different address from this page"), true);
+  assertEq(other.includes("relay.example"), false);
+  assertEq(other.includes("Connected ✓"), false);
   t.done();
 
   const { PUBLIC_URL: _, ...env } = ENV;
