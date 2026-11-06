@@ -214,7 +214,7 @@ def run_once(client_factory=MacClient, load=load_video, transcribe=local_only_tr
         return 1
     url, secret = cfg.get("relay_url"), cfg.get("mac_secret")
     if not isinstance(url, str) or not isinstance(secret, str) or not secret.strip():
-        print("mac-worker: put relay_url and mac_secret in ~/.reelay/config.toml (see docs/SETUP-CLOUD.md).")
+        print("mac-worker: put relay_url and mac_secret in ~/.reelay/config.toml (see docs/SETUP-MAC-WORKER.md).")
         return 1
     try:
         client = client_factory(url, secret.strip())
@@ -242,12 +242,14 @@ def build_plist(command: list[str], path_env: str, log: Path) -> dict:
     data.pop("KeepAlive", None)
     data.pop("ThrottleInterval", None)
     data.update({"Label": LABEL, "StartInterval": 60, "RunAtLoad": True})
+    if os.environ.get("REELAY_HOME"):  # keep a custom config folder when launchd starts the worker
+        data["EnvironmentVariables"]["REELAY_HOME"] = os.environ["REELAY_HOME"]
     return data
 
 
 def worker_command() -> list[str]:
-    exe = shutil.which("reelay")
-    return [exe, "mac-worker", "--once"] if exe else [sys.executable, "-m", "reelay.installer.cli", "mac-worker", "--once"]
+    """Run with the Python that is running now, so `reelay` need not be on launchd's PATH."""
+    return [sys.executable, "-m", "reelay.installer.cli", "mac-worker", "--once"]
 
 
 def install(run=service._run, home: Path | None = None, command: list[str] | None = None,
@@ -284,6 +286,10 @@ def main(argv: list[str]) -> int:
     if action == "--once":
         return run_once()
     if action in ("install", "remove"):
+        if sys.platform != "darwin":
+            print("The Mac worker's background service only works on macOS (it uses launchd). "
+                  "On other systems you can still run:  reelay mac-worker --once")
+            return 1
         problem = (install if action == "install" else remove)()
         print(problem or ("The Mac worker now checks the relay every minute." if action == "install"
                           else "Removed. The Mac worker no longer runs."))
