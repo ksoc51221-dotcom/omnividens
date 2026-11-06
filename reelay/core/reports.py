@@ -5,7 +5,9 @@ is validated here: unknown or missing values fail closed to read-only text with 
 """
 
 import math
+import os
 import re
+import stat
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -15,13 +17,12 @@ from reelay.sandbox.safety import find_problem
 TYPES = {"skill": "bot skill", "mod": "mod", "app": "full app"}  # fixed list; anything else is "unclear"
 ADOPT_TYPES = {"skill", "mod"}
 # A mod is code that runs on the user's machine, so a clean scan of a repo that contains code is never "YES":
-# it is UNSURE with a warning, and (owner's decision) a skill/mod with confirmed identity and file evidence
-# still gets Adopt.
+# it is UNSURE with a warning and NO Adopt button; the report shows the clone line for the owner to run by hand.
 VERDICTS = ("YES", "NO", "UNSURE")
 MAX_REPORTS = 9  # per video
 MAX_TEXT = 3800
 NO_PROJECTS = "No project list yet. Send /projects to add one."
-NO_FIT = "No fit with your listed projects."
+NO_FIT = "Doesn't fit any of your listed projects."
 _REPO = re.compile(r"https://github\.com/([A-Za-z0-9][A-Za-z0-9-]*)/([A-Za-z0-9][A-Za-z0-9._-]*)")
 # control chars, plus bidi overrides/isolates and zero-width marks that can hide or reorder text
 _CTRL = re.compile("[\x00-\x1f\x7f\u061c\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]+")
@@ -70,22 +71,14 @@ class CandidateReport:
     owner_repo: str | None  # exact owner/repo, only when it matches the URL
     name_only: bool  # matched from a name only, not a link the video showed
     what: str
-    problem: str
-    pros: list[str] = field(default_factory=list)
-    cons: list[str] = field(default_factory=list)
     impact: str = NO_FIT
     usage: dict = field(default_factory=dict)  # validated, every number labelled
-    examples: list[str] = field(default_factory=list)
     ran: bool = False  # the routine never runs anything; always False
     code_paths: list[str] = field(default_factory=list)  # executable-looking files found in the clone (max 5)
     has_code: bool = False
     commit: str | None = None  # the commit our own clone scanned
     model_safety: str = "UNSURE"  # what the model said; it can only lower the final verdict
     claim_matches: bool = False
-
-
-def _strs(v, n: int, limit: int) -> list[str]:
-    return [s for s in (plain(x, limit) for x in (v if isinstance(v, list) else [])[:n]) if s]
 
 
 def _usage(raw) -> dict:
@@ -112,7 +105,7 @@ def _impact(raw, projects: list[str]) -> str:
     wanted = plain(raw.get("project"), 80).lower()
     match = next((p for p in projects if p.lower() == wanted), None) if wanted else None
     why = plain(raw.get("why"), 300)
-    return f"Fits {match}: {why}" if match and why else NO_FIT
+    return f"Could help {match}: {why}" if match and why else NO_FIT
 
 
 def parse_report(raw, projects: list[str]) -> CandidateReport | None:
@@ -138,10 +131,8 @@ def parse_report(raw, projects: list[str]) -> CandidateReport | None:
         name=name, url=url, type=typ, type_note=plain(raw.get("type_note"), 200), safety=safety,
         safety_reason=reason, owner_repo=owner_repo, name_only=True, model_safety=model_safety,
         claim_matches=claim_matches,
-        what=plain(info.get("what"), 400) or "No description was found.", problem=plain(info.get("problem"), 200),
-        pros=_strs(info.get("pros"), 2, 160), cons=_strs(info.get("cons"), 2, 160),
-        impact=_impact(raw.get("impact"), projects), usage=_usage(raw.get("usage")),
-        examples=_strs(info.get("examples"), 3, 160))
+        what=plain(info.get("what"), 400) or "No description was found.",
+        impact=_impact(raw.get("impact"), projects), usage=_usage(raw.get("usage")))  # old pros/cons/etc. ignored
 
 
 def type_evidence(clone: Path) -> set[str]:
@@ -209,6 +200,38 @@ def find_code(clone: Path) -> list[str]:
     return found
 
 
+MAX_SKILL_FILES = 20  # SKILL.md files measured per repo
+_MAX_WALK = 5000  # directory entries looked at
+
+
+def measure_skill_tokens(clone: Path | None) -> list[int]:
+    """Approximate load cost (bytes / 4) of each SKILL.md in OUR clone, sorted. Sizes only, never contents;
+    symlinks are not followed, `.git` is skipped, and the walk is bounded."""
+    if not _safe_dir(clone):
+        return []
+    sizes: list[int] = []
+    seen = 0
+    try:
+        for root, dirs, files in os.walk(clone, followlinks=False):
+            dirs[:] = [d for d in dirs if d != ".git"]
+            for name in files:
+                seen += 1
+                if seen > _MAX_WALK or len(sizes) >= MAX_SKILL_FILES:
+                    return sorted(sizes)
+                if name != "SKILL.md":
+                    continue
+                try:
+                    st = os.lstat(os.path.join(root, name))
+                except OSError:
+                    continue
+                if stat.S_ISREG(st.st_mode) and st.st_size > 0:
+                    sizes.append(max(1, round(st.st_size / 4)))
+            seen += len(dirs)
+    except OSError:
+        pass
+    return sorted(sizes)
+
+
 def apply_gate(rep: CandidateReport, clone: Path | None, confirmed: set[str],
                commit: str | None = None) -> CandidateReport:
     """Decide safety, identity and type from evidence, not from model output.
@@ -220,6 +243,11 @@ def apply_gate(rep: CandidateReport, clone: Path | None, confirmed: set[str],
     ok_id = bool(rep.owner_repo) and rep.claim_matches and rep.owner_repo.lower() in confirmed
     rep.name_only = not ok_id
     rep.has_code, rep.code_paths = False, []
+    rep.usage = {k: v for k, v in rep.usage.items() if k != "measured_tokens"}
+    measured = measure_skill_tokens(clone)
+    if measured:  # a real measurement from our clone replaces the model's guess
+        rep.usage["measured_tokens"] = measured
+        rep.usage.pop("tokens", None)
     # safety: our own scan of the clone
     scan = "unknown"
     why = "I couldn't fetch it to scan it, so I only know what the README claims."
@@ -264,16 +292,24 @@ def apply_gate(rep: CandidateReport, clone: Path | None, confirmed: set[str],
     return rep
 
 
-def adopt_line(rep: CandidateReport) -> str | None:
-    """The ONLY place a clone line is allowed. Never run by us.
+def _adoptable(rep: CandidateReport) -> bool:
+    """A skill/mod backed by files, with an exact repo confirmed by the video or the owner."""
+    return rep.type in ADOPT_TYPES and bool(rep.owner_repo) and not rep.name_only
 
-    Needs a skill/mod backed by files, an exact repo confirmed by the video or the owner, and either safety
-    YES or the one UNSURE case: a clean scan of a repo that contains code."""
-    if rep.type not in ADOPT_TYPES or not rep.owner_repo or rep.name_only:
-        return None
-    if rep.safety == "YES" and not rep.has_code:
+
+def adopt_line(rep: CandidateReport) -> str | None:
+    """The ONLY clone line that gets Adopt/Skip buttons. Never run by us.
+
+    Only a skill/mod with files as evidence, confirmed identity, safety YES and no code in the repo."""
+    if _adoptable(rep) and rep.safety == "YES" and not rep.has_code:
         return adopt_line_for(rep.url)
-    if rep.safety == "UNSURE" and rep.has_code:
+    return None
+
+
+def manual_line(rep: CandidateReport) -> str | None:
+    """Clone line shown as text only (no buttons) for a skill/mod with confirmed identity whose scan was clean
+    but which contains code the scan can't judge. The owner runs it by hand after reading the files."""
+    if _adoptable(rep) and rep.safety == "UNSURE" and rep.has_code:
         return adopt_line_for(rep.url)
     return None
 
@@ -283,9 +319,6 @@ def adopt_note(rep: CandidateReport) -> str | None:
     if not adopt_line(rep):
         return None
     parts = []
-    if rep.has_code:
-        parts.append("⚠️ It contains code that would run on your computer. Read these first: "
-                     + ", ".join(rep.code_paths))
     if rep.commit:
         parts.append(f"I scanned commit {rep.commit[:12]}. The repo may have changed since, so check the commit "
                      "you get.")
@@ -293,21 +326,29 @@ def adopt_note(rep: CandidateReport) -> str | None:
     return "\n".join(parts)
 
 
-def _usage_lines(u: dict) -> str:
-    bits = []
-    bits.append(f"setup ~{u['setup_minutes']} min (estimate)" if "setup_minutes" in u else "setup time unknown")
+def _tokens_text(u: dict) -> str:
+    m = u.get("measured_tokens")
+    if m:
+        if len(m) == 1:
+            return f"About {m[0]:,} tokens each time it loads (measured from SKILL.md)"
+        return (f"{len(m)} skills, about {m[0]:,} to {m[-1]:,} tokens each time one loads "
+                "(measured from SKILL.md files)")
+    lvl = f"{u['level']}, " if u.get("level") else ""
     if "tokens" in u:
-        lvl = f"{u['level']}, " if u.get("level") else ""
-        bits.append(f"AI use {lvl}~{u['tokens']:,} tokens ({u['basis']})")
-    else:
-        bits.append("AI use " + (f"{u['level']} " if u.get("level") else "") + "(estimate, no token count)")
-    bits.append(f"money: {u['money']} (estimate)" if u.get("money") else "money unknown (estimate)")
-    return "; ".join(bits)
+        return f"AI use {lvl}~{u['tokens']:,} tokens ({u['basis']})"
+    return "AI use " + (f"{u['level']} " if u.get("level") else "") + "(estimate, no token count)"
+
+
+def _usage_lines(u: dict) -> str:
+    setup = f"setup ~{u['setup_minutes']} min (estimate)" if "setup_minutes" in u else "setup time unknown"
+    money = f"money: {u['money']} (estimate)" if u.get("money") else "money unknown (estimate)"
+    return "; ".join([setup, _tokens_text(u), money])
 
 
 def format_report(rep: CandidateReport) -> tuple[str, str | None]:
     """(message text, clone line or None). Plain text only."""
     line = adopt_line(rep)
+    manual = manual_line(rep)
     ident = rep.owner_repo or "exact repo not confirmed"
     ident += " (matched from a name only)" if rep.name_only else ""
     typ = TYPES.get(rep.type, "unclear")
@@ -320,19 +361,15 @@ def format_report(rep: CandidateReport) -> tuple[str, str | None]:
     if rep.commit:
         ident += f" · scanned commit {rep.commit[:12]}"
     lines += [safe, f"Repo: {ident}", "",
-              f"2. What it does: {rep.what}" + (f" Problem it solves: {rep.problem}" if rep.problem else "")]
-    if rep.pros:
-        lines.append("Pros: " + "; ".join(rep.pros))
-    if rep.cons:
-        lines.append("Cons: " + "; ".join(rep.cons))
+              f"2. What it does: {rep.what}"]
     lines += ["", f"3. Where it fits you: {rep.impact}", f"4. Usage: {_usage_lines(rep.usage)}"]
-    if rep.examples:
-        lines.append("Used for: " + "; ".join(rep.examples))
-    if line and rep.has_code:
-        lines.append("⚠️ It contains code that runs on your computer. Adopt only shows the install command. "
-                     "I have NOT installed anything.")
+    if manual:
+        lines.append(f"⚠️ This {TYPES[rep.type]} contains code that the scan can't judge. I did not read or run "
+                     f"it. Read the files named in the safety line first. No Adopt button for this one. "
+                     f"If you still want it, run this yourself: {manual}")
+        lines.append("Nothing was installed.")
     elif line:
-        lines.append("Adopt shows the install command. I have NOT installed anything.")
+        lines.append("Adopt shows the clone command. I have NOT installed anything.")
     elif rep.type in ("app", "unclear"):
         lines.append("Read-only: no install button for this one. Nothing was installed.")
     else:
