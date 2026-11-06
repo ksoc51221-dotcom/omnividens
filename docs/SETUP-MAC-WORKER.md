@@ -7,10 +7,15 @@ You do every step yourself. The secret is never printed on screen and never past
 ## What you need
 
 - A Mac with the Omnividens relay already working (see the cloud setup guide) and its address, like `https://YOUR-APP.deno.net`.
-- `reelay` installed on this Mac, plus `yt-dlp` and `ffmpeg`:
+- `yt-dlp` and `ffmpeg`:
   ```bash
   brew install yt-dlp ffmpeg
   ```
+- `reelay` installed from your copy of this repository. Run this once inside the repository folder (needs Python 3.11 or newer):
+  ```bash
+  python3 -m venv .venv && .venv/bin/pip install -e .
+  ```
+  Every `reelay` command below then runs as `.venv/bin/reelay` from that folder.
 - Optional: `faster-whisper` with its model already downloaded, for videos without captions. Without it those videos just get a report that says no captions were available.
 
 ## Steps

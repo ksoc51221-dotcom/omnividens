@@ -91,7 +91,7 @@ Omnividens runs in the cloud, so you set up three small things: a Telegram bot, 
 
 Only needed to get YouTube links through. It uses launchd, so it works on macOS only.
 
-<!-- MAC-WORKER -->
+Follow [docs/SETUP-MAC-WORKER.md](docs/SETUP-MAC-WORKER.md). *Not run live yet: the plist generation was tested from a clean clone, but the worker has not fetched a real video on any Mac.*
 
 ### 4. Honest limits
 

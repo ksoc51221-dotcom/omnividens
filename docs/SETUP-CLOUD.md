@@ -59,20 +59,7 @@ Read the step-by-step guide in the README first (`README.md`, "Set it up"). This
 
 YouTube answers cloud downloads with "confirm you're not a bot". With this on, the relay hands those links to your Mac, which only fetches: it runs no model and no routine, and the video file never leaves the Mac (only small frames and the transcript go up). Skip it and blocked YouTube links just get a plain "blocked from the cloud" reply.
 
-1. **Make a third secret** in your own Terminal and keep it in Notes. Never paste it into chat:
-   ```bash
-   openssl rand -hex 32
-   ```
-2. **Relay:** Deno console → your app → Settings → Environment Variables → add `MAC_SECRET` as a **Secret** with that value (Production and Development), then redeploy. It opens only the Mac worker routes; `RELAY_SECRET` does not open them.
-3. **Mac:** add two lines to `~/.reelay/config.toml` (edit it yourself):
-   ```toml
-   relay_url = "https://YOUR-APP.deno.net"
-   mac_secret = "the value from step 1"
-   ```
-   Then lock the file down: `chmod 600 ~/.reelay/config.toml`.
-4. **Start it:** `reelay mac-worker install` (checks the relay once a minute while your Mac is awake and logged in; `reelay mac-worker remove` stops it). Needs `yt-dlp` and `ffmpeg` on the Mac. Optional: `faster-whisper` with its model already downloaded gives transcripts for videos without captions; nothing is ever sent to Groq or OpenAI.
-5. **How it behaves:** one yt-dlp attempt per link, never retried. If the Mac is asleep the relay keeps the link for 24 hours (a claim lasts 15 minutes, two attempts), then tells you and asks you to resend. If the Mac's network blocks or rate-limits the Mac too, you get that reason in Telegram.
-6. Expiry messages are sent when anything next hits the relay (a message, a worker poll) and by a 10-minute cron if your Deno Deploy supports `Deno.cron`. Without cron an expiry message can arrive late. A queued job's database row is kept for 7 days in the database so the message still goes out the next time anything touches the relay.
+Setup steps are in [SETUP-MAC-WORKER.md](SETUP-MAC-WORKER.md).
 
 ## If something goes wrong
 
