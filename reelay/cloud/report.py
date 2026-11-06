@@ -216,7 +216,12 @@ def run(workdir: str, relay_factory=Relay, cloner=_hardened_clone) -> int:
             prof_d.setdefault("traits", {})
             if isinstance(prof_d["traits"], dict):
                 prof_d["traits"]["last_checked"] = datetime.date.today().isoformat()
-                relay.put_profile({"vibe": profile.vibe, "goals": profile.goals, "traits": {**profile.traits, "last_checked": prof_d["traits"]["last_checked"]}})
+                traits = {**profile.traits, "last_checked": prof_d["traits"]["last_checked"]}
+                finds = len(reps) + len(left)
+                if isinstance(started, (int, float)) and finds > 0 and 0 < time.time() - started < 6 * 3600:
+                    # measured seconds per find: the next "About N min" estimate uses it (summary.py)
+                    traits["sec_per_find"] = str(max(1, round((time.time() - started) / finds)))
+                relay.put_profile({"vibe": profile.vibe, "goals": profile.goals, "traits": traits})
         except Exception:  # noqa: BLE001 - profile update is best effort
             pass
         return 0
