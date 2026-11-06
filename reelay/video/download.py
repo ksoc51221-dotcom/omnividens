@@ -15,7 +15,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
-from reelay.video.errors import DownloadError, NetworkError, TooLongError
+from reelay.video.errors import (
+    BadLinkError, BlockedError, DownloadError, NetworkError, RateLimitedError, TooLongError,
+)
 
 VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".mov", ".m4v"}
 MAX_FILESIZE = "200M"
@@ -29,6 +31,22 @@ _NETWORK_HINTS = (
     "getaddrinfo failed", "connection refused", "connection reset",
     "network is unreachable", "timed out", "failed to establish a new connection",
 )
+
+
+# Fragments of yt-dlp ERROR lines, checked in this order. Bot check first: it is the cloud's usual failure.
+_BLOCKED_HINTS = ("not a bot", "unusual traffic", "captcha")
+_RATE_HINTS = ("http error 429", "too many requests")
+_BAD_LINK_HINTS = (
+    "private video", "video unavailable", "has been removed", "unsupported url", "is not available",
+    "no longer available", "members-only", "members only", "this video is private", "does not exist",
+    "http error 404", "http error 410", "sign in to confirm your age", "account associated",
+    "terminated", "copyright",
+)
+
+# English tracks only, named explicitly. "en.*" asks for every English variant, translated
+# tracks included, and that many subtitle requests invites HTTP 429.
+SUB_LANGS = "en,en-US,en-GB,en-orig"
+_SUB_ORDER = ("en", "en-US", "en-GB", "en-orig")
 
 
 @dataclass
@@ -75,7 +93,7 @@ def _network_error_line(stderr: str) -> str | None:
 def _run_group(cmd: list[str], timeout_s: int) -> subprocess.CompletedProcess:
     """Run in its own process group so a timeout also kills yt-dlp's ffmpeg children."""
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True, start_new_session=True)
+                            text=True, encoding="utf-8", errors="replace", start_new_session=True)
     try:
         out, err = proc.communicate(timeout=timeout_s)
     except subprocess.TimeoutExpired:
@@ -105,6 +123,8 @@ def _download(url: str, out_dir: Path, timeout_s: int) -> Downloaded:
     out_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
         "yt-dlp", "--ignore-config", "--no-playlist", "--ignore-errors", "--no-warnings",
+        # One attempt only: failures are reported, never retried against the site.
+        "--retries", "0", "--fragment-retries", "0", "--extractor-retries", "0",
         "--max-filesize", MAX_FILESIZE,
         # "<=?" lets videos with no duration metadata (plain .mp4 links) through;
         # pipeline.py re-checks the real length with ffprobe after download.
@@ -112,7 +132,7 @@ def _download(url: str, out_dir: Path, timeout_s: int) -> Downloaded:
         "-f", "bv*[height<=720]+ba/b[height<=720]/bv+ba/b",
         "--merge-output-format", "mp4",
         "--write-info-json", "--write-subs", "--write-auto-subs",
-        "--sub-langs", "en.*,en", "--sub-format", "vtt", "--convert-subs", "vtt",
+        "--sub-langs", SUB_LANGS, "--sub-format", "vtt", "--convert-subs", "vtt",
         "-o", str(out_dir / "video.%(ext)s"), "--", url,
     ]
     try:
@@ -124,8 +144,10 @@ def _download(url: str, out_dir: Path, timeout_s: int) -> Downloaded:
     video = _find_video(out_dir)
     if video is None:
         err = proc.stderr or ""
-        if "does not pass filter" in err or "larger than max-filesize" in err:
+        said = f"{proc.stdout or ''}\n{err}"  # yt-dlp prints both skips on stdout and still exits 0
+        if "does not pass filter" in said or "larger than max-filesize" in said:
             raise TooLongError(f"video is over {MAX_DURATION_S // 60} min or {MAX_FILESIZE}")
+        _raise_classified(err)
         net_line = _network_error_line(err)
         if net_line:
             raise NetworkError("host unreachable: " + net_line, safe_host(url))
@@ -133,8 +155,32 @@ def _download(url: str, out_dir: Path, timeout_s: int) -> Downloaded:
         raise DownloadError(f"yt-dlp produced no video: {tail[0]}")
     if video.stat().st_size > MAX_FILESIZE_BYTES:  # yt-dlp's own cap misses some streams
         raise TooLongError(f"file is over {MAX_FILESIZE}")
+    return Downloaded(video, pick_subtitle(out_dir), _read_caption(out_dir))
+
+
+def pick_subtitle(out_dir: Path) -> Path | None:
+    """Whichever .vtt arrived: plain English first, then the other English tracks, then any."""
     subs = sorted(out_dir.glob("video*.vtt"))
-    return Downloaded(video, subs[0] if subs else None, _read_caption(out_dir))
+    for lang in _SUB_ORDER:
+        for sub in subs:
+            if sub.name == f"video.{lang}.vtt":
+                return sub
+    return subs[0] if subs else None
+
+
+def _raise_classified(stderr: str) -> None:
+    """Turn yt-dlp's ERROR lines into BlockedError / RateLimitedError / BadLinkError, if they match."""
+    errors = " ".join(l.lower() for l in stderr.replace("\u2019", "'").splitlines() if l.startswith("ERROR"))
+    if any(h in errors for h in _BLOCKED_HINTS):
+        raise BlockedError("site bot check: " + _first_error(stderr))
+    if any(h in errors for h in _RATE_HINTS):
+        raise RateLimitedError("rate limited: " + _first_error(stderr))
+    if any(h in errors for h in _BAD_LINK_HINTS) and not _network_error_line(stderr):
+        raise BadLinkError("bad link: " + _first_error(stderr))
+
+
+def _first_error(stderr: str) -> str:
+    return next((l for l in stderr.splitlines() if l.startswith("ERROR")), "")[:200]
 
 
 def _find_video(out_dir: Path) -> Path | None:

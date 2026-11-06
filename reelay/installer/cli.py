@@ -14,6 +14,7 @@ HELP = """Omnividens: share a video to your Telegram bot; your AI watches and fa
   reelay pair             show a new pairing code and QR code for another phone
   reelay service install  start Omnividens automatically when you log in
   reelay service remove   stop that and delete it
+  reelay mac-worker install | remove | --once   cloud fallback: this Mac fetches videos YouTube blocks in the cloud
   reelay                  run the bot now (same as: reelay run); add --debug for full error details
 """
 
@@ -72,6 +73,10 @@ def main(argv: list[str] | None = None) -> int:
         return _pair(io)
     if command == "service":
         return _service(io, argv[1] if len(argv) > 1 else "")
+    if command == "mac-worker":
+        from reelay.cloud.mac_worker import main as mac_main
+
+        return mac_main(argv[1:])
     if command in ("run", "--pair"):
         from reelay.__main__ import main as run_bot
 

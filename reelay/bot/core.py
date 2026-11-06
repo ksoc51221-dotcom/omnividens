@@ -109,6 +109,6 @@ def too_big_reply() -> Reply:
 
 def download_failed_reply() -> Reply:
     return Reply(
-        "I couldn't download that video (some apps block it). "
-        "Could you send a screen recording of it instead?"
+        "I couldn't download that video. The link may be private, removed or unsupported, "
+        "or the site may be blocking or rate limiting downloads. Try again later, or send the video file itself."
     )
