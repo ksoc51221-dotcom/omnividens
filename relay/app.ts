@@ -20,6 +20,14 @@ const MAX_PROJECT_LINES = 20;
 const MAX_PROJECT_LINE = 200;
 const MAX_GOAL_LINES = 5;
 const MAX_GOAL_LINE = 300;
+const SEARCH_TIMEOUT_MS = 10_000;
+const PICK_TTL_MS = 15 * 60 * 1000;
+const NAME_RE = /^[\p{L}\p{N} ._+-]{2,80}$/u;
+const OWNER_REPO_RE = /^[A-Za-z0-9][A-Za-z0-9-]*\/(?!\.{1,2}$)[A-Za-z0-9._-]+$/;
+const REPORT_USAGE =
+  "Send /report owner/repo (for example /report anthropics/skills) or /report followed by a skill name.";
+const SEARCH_FAILED =
+  "I couldn't find that on GitHub right now. Send /report owner/repo instead (for example /report anthropics/skills).";
 const DAY = 24 * 3600 * 1000;
 const MAC_ONLINE_MS = 3 * 60 * 1000;
 const LEASE_MS = 15 * 60 * 1000;
@@ -40,8 +48,8 @@ const NO_LINK_REPLY =
 const HELP_REPLY =
   `Send me a video (up to 20 MB) or a link to a Reel, TikTok or Short. I fact-check it and report on any GitHub tools it mentions. Each one takes a few minutes and uses your Claude usage.
 
-/report owner/repo: report on one GitHub repo. This also uses your Claude usage.
-/goals: show your goals. Put lines after it to replace them, or "clear" to delete them.
+/report owner/repo (or /report <skill name>): report on one GitHub repo. A name is looked up on GitHub and I ask you to confirm it first. This also uses your Claude usage.
+/goals: what you want to achieve (for example "win a hackathon"). I use them to point out what matters to you when I summarise a video; they never change the safety checks. Put lines after it to replace them, or "clear" to delete them.
 /projects: show your projects. Put lines after it to replace them, or "clear" to delete them.
 /help: show this list.
 
@@ -198,21 +206,128 @@ export function makeHandler(deps: Deps): Handler {
     }
     if (fromId !== owner.trim()) return text("ok", 200);
 
-    if (cb) await callback(cb);
+    if (cb) await callback(cb, u.update_id, new URL(req.url).origin);
     else if (msg) await ownerMessage(msg, u.update_id, new URL(req.url).origin);
     return text("ok", 200);
   }
 
-  async function callback(cb: Json) {
+  async function callback(cb: Json, updateId = 0, origin = "") {
     const chat = cb.message?.chat?.id ?? cb.from?.id; // message is inaccessible after 48 h
-    const m = /^(adopt|skip):([\w-]{1,64})$/.exec(String(cb.data ?? ""));
+    const m = /^(adopt|skip|rpick|rno):([\w-]{1,64})$/.exec(String(cb.data ?? ""));
     await tg("answerCallbackQuery", { callback_query_id: cb.id });
     if (!m || typeof chat !== "number") return;
+    if (m[1] === "rpick" || m[1] === "rno") {
+      return void await reportPick(chat, m[1], m[2], updateId, origin);
+    }
     if (m[1] === "skip") return void await say(chat, "Skipped.");
     const stored = (await kv.get<string | { line: string; note?: string }>(["adopt", m[2]])).value;
     const line = typeof stored === "string" ? stored : stored?.line;
     const note = typeof stored === "object" && stored?.note ? `${stored.note}\n\n` : "";
     await say(chat, line ? note + line : "That suggestion expired.");
+  }
+
+  // ---- /report <name>: top GitHub search match, confirmed with Yes/No before any run ----
+  interface Pick {
+    repo: string;
+    chat: number;
+    message_id: number;
+  }
+
+  // Plain, capped text from GitHub: no control or bidi characters, no links.
+  function plainText(v: unknown, limit: number): string {
+    if (typeof v !== "string") return "";
+    const t = v.replace(/[\x00-\x1f\x7f\u061c\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]+/g, " ")
+      .replace(/(?:https?:\/\/|www\.)\S+/gi, "").replace(/\s+/g, " ").trim();
+    return t.length <= limit ? t : t.slice(0, limit - 1) + "…";
+  }
+
+  // The top public search result, or null on no result, timeout, rate limit or anything odd.
+  async function searchRepo(q: string): Promise<{ repo: string; desc: string } | null> {
+    try {
+      const r = await deps.fetch(
+        `https://api.github.com/search/repositories?q=${encodeURIComponent(q)}&per_page=1`,
+        {
+          headers: { "accept": "application/vnd.github+json", "user-agent": "omnividens-relay" },
+          signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+        },
+      );
+      if (r.status !== 200) {
+        await r.body?.cancel();
+        return null;
+      }
+      const top = (await r.json())?.items?.[0];
+      const full = top?.full_name;
+      if (typeof full !== "string" || !OWNER_REPO_RE.test(full) || /\.git$/i.test(full)) {
+        return null;
+      }
+      return { repo: full, desc: plainText(top?.description, 200) };
+    } catch {
+      return null;
+    }
+  }
+
+  async function reportByName(chat: number, messageId: number, name: string) {
+    const q = name.replace(/\s+/g, " ").trim();
+    if (!NAME_RE.test(q)) return void await say(chat, REPORT_USAGE);
+    const hit = await searchRepo(q);
+    if (!hit) return void await say(chat, SEARCH_FAILED);
+    const id = deps.randomId();
+    await kv.set(["rpick", id], { repo: hit.repo, chat, message_id: messageId } as Pick, {
+      expireIn: PICK_TTL_MS,
+    });
+    await say(
+      chat,
+      `Top GitHub search match for "${q}": ${hit.repo}${hit.desc ? ` - ${hit.desc}` : ""}\n\n` +
+        `This is only the top search result, not a verified match: names can be spoofed or ambiguous. ` +
+        `Check it is the one you mean. A report uses one run of your Claude usage.`,
+      {
+        reply_markup: {
+          inline_keyboard: [[
+            { text: "Yes, report it", callback_data: `rpick:${id}` },
+            { text: "No", callback_data: `rno:${id}` },
+          ]],
+        },
+      },
+    );
+  }
+
+  // Yes/No on a pending pick. The row is claimed atomically first, so a double tap fires once.
+  async function reportPick(
+    chat: number,
+    kind: string,
+    id: string,
+    updateId: number,
+    origin: string,
+  ) {
+    const entry = await kv.get<Pick>(["rpick", id]);
+    const pick = entry.value;
+    if (!pick || pick.chat !== chat) return void await say(chat, "That suggestion expired.");
+    const claim = await kv.atomic().check(entry).delete(entry.key).commit();
+    if (!claim.ok) return; // another tap has it
+    if (kind === "rno") return void await say(chat, "OK, I won't report on it.");
+    if (!(await takeRateSlot())) {
+      await kv.atomic().check({ key: entry.key, versionstamp: null })
+        .set(entry.key, pick, { expireIn: PICK_TTL_MS }).commit(); // let them tap again later
+      return void await say(chat, "Busy, try again later");
+    }
+    await say(chat, "Got it. Takes a few minutes.");
+    const code = await fireRoutine({
+      v: 1,
+      update_id: updateId,
+      chat_id: chat,
+      message_id: pick.message_id,
+      text: `/report ${pick.repo}`,
+      file: null,
+      relay_url: origin,
+    });
+    if (code) {
+      await say(
+        chat,
+        code > 0
+          ? `Could not start the analysis (routine returned HTTP ${code}).`
+          : "Could not start the analysis (routine unreachable).",
+      );
+    }
   }
 
   // Owner's written project list: handled here, before any routine run, so it costs no routine call.
@@ -331,15 +446,16 @@ export function makeHandler(deps: Deps): Handler {
     const isReport = !files.length && /^\/report(@\w+)?(\s|$)/.test(text_.trim());
     if (isReport) { // one repo, one routine run
       const t = text_.trim();
+      const arg = t.replace(/^\/report(@\w+)?/, "").trim();
+      if (!arg) return void await say(chat, REPORT_USAGE);
+      // not owner/repo-shaped (no slash): treat it as a skill name and ask before running anything
+      if (!arg.includes("/")) return void await reportByName(chat, msg.message_id, arg);
       // prepare.py refuses .git names too, so don't spend a run finding that out.
       if (
         !/^\/report(@\w+)?\s+[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9][\w.-]*$/.test(t) ||
         /\.git$/i.test(t)
       ) {
-        return void await say(
-          chat,
-          "Send /report owner/repo, for example /report anthropics/skills",
-        );
+        return void await say(chat, REPORT_USAGE);
       }
     }
 
