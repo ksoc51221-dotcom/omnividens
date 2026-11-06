@@ -38,13 +38,12 @@ def build(finds, profile: dict) -> str | None:
     for f in (finds if isinstance(finds, list) else [])[:MAX_REPORTS]:
         if not isinstance(f, dict):
             continue
-        name, what = plain(f.get("name"), 60), plain_sentence(f.get("what"), 300)
+        name, what = plain(f.get("name"), 60), plain_sentence(f.get("what"), 160)
         if name:
             out.append(f"• {name}: {what}" if what else f"• {name}")
     if not out:
         return None
-    them = "it" if len(out) == 1 else "them"
-    return "\n".join(out) + f"\n\nI'll scan {them} and write the report. About {minutes(profile, len(out))} min."
+    return "\n".join(out).removeprefix("• " if len(out) == 1 else "") + f"\nEstimated {minutes(profile, len(out))} min."
 
 
 def run(workdir: str, relay_factory=Relay) -> int:

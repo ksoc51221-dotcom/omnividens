@@ -191,20 +191,28 @@ def run(workdir: str, relay_factory=Relay, cloner=_hardened_clone) -> int:
                 _reports.apply_gate(r, clone, confirmed, commit)
         sent, daily = 0, False
         if not repo_only:
-            tail = [_reports.not_found_line(n, s) for n, s in not_found]
-            if not reps and not left:
-                tail.append("Done. No repo could be checked." if not_found
-                            else "Done. Nothing to install in this one.")
-            relay.send(job.chat_id, _reports.format_factcheck(
-                verdict, "\n".join(tail),
-                saw=saw_line(data.get("frames_viewed"), len(frames))))
-            sent += 1
+            missing = [_reports.not_found_line(n, s) for n, s in not_found]
+            saw = saw_line(data.get("frames_viewed"), len(frames))
+            if reps or left:  # a tool video: the report is the message; no fact-check
+                if missing:
+                    relay.send(job.chat_id, "\n".join(missing))
+                    sent += 1
+            elif missing:
+                relay.send(job.chat_id, _reports.format_factcheck(
+                    verdict, "\n".join(missing + ["No repo could be checked. Nothing was installed."]), saw=saw))
+                sent += 1
+            else:
+                relay.send(job.chat_id, _reports.format_factcheck(
+                    verdict, saw=saw, lead="No tool or repo in this video. Here's a quick fact-check:"))
+                sent += 1
         elif not reps:
             relay.send(job.chat_id, "I couldn't build a report for that repo. Nothing was installed.")
             sent += 1
         done = 0
         for i, rep in enumerate(reps):
             text, line = _reports.format_report(rep)
+            if i == 0 and not repo_only and rep.safety != "NO":
+                text += "\n" + saw
             try:
                 relay.send(job.chat_id, text, line, report=True, adopt_note=_reports.adopt_note(rep))
                 sent, done = sent + 1, done + 1

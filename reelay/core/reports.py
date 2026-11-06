@@ -308,11 +308,12 @@ def apply_gate(rep: CandidateReport, clone: Path | None, confirmed: set[str],
     if scan == "high" or rep.model_safety == "NO":
         rep.safety = "NO"
         rep.safety_reason = why if scan == "high" else (rep.safety_reason or "The review found risky behaviour.")
-    elif scan == "clean" and rep.model_safety == "YES" and ok_id:
+    elif scan == "clean" and rep.model_safety == "YES" and rep.owner_repo and rep.claim_matches:
+        # ok_id or found by search: Adopt only prints a clone line, and the report names the repo. Revisit before T32.
         rep.safety, rep.safety_reason = "YES", why
     else:
         rep.safety = "UNSURE"
-        if scan in ("clean", "code") and not ok_id:
+        if scan == "clean" and not ok_id:
             rep.safety_reason = "I couldn't confirm this is the exact repo the video meant."
         elif scan == "clean":
             rep.safety_reason = rep.safety_reason or "The scan found nothing, but the review was not sure. I only read the code, I didn't run it."
@@ -329,8 +330,8 @@ def apply_gate(rep: CandidateReport, clone: Path | None, confirmed: set[str],
 
 
 def _adoptable(rep: CandidateReport) -> bool:
-    """A skill/mod backed by files, with an exact repo confirmed by the video or the owner."""
-    return rep.type in ADOPT_TYPES and bool(rep.owner_repo) and not rep.name_only
+    """A skill/mod backed by files, with an exact repo (confirmed, or found by search and named in the report)."""
+    return rep.type in ADOPT_TYPES and bool(rep.owner_repo)
 
 
 def adopt_line(rep: CandidateReport) -> str | None:
@@ -345,7 +346,7 @@ def adopt_line(rep: CandidateReport) -> str | None:
 def manual_line(rep: CandidateReport) -> str | None:
     """Clone line shown as text only (no buttons) for a skill/mod with confirmed identity whose scan was clean
     but which contains code the scan can't judge. The owner runs it by hand after reading the files."""
-    if _adoptable(rep) and rep.safety == "UNSURE" and rep.has_code:
+    if _adoptable(rep) and not rep.name_only and rep.safety == "UNSURE" and rep.has_code:
         return adopt_line_for(rep.url)
     return None
 
@@ -406,11 +407,10 @@ def format_report(rep: CandidateReport) -> tuple[str, str | None]:
     if rep.commit:
         ident += f" · scanned commit {rep.commit[:12]}"
     lines += [safe, f"Repo: {ident}"]
-    if rep.name_only and rep.owner_repo and not (line or manual):
-        lines.append("I found this by searching, so I can't be sure it's the one in the video. If it is, "
-                     f"send /report {rep.owner_repo} and I'll check it as yours.")
+    if rep.name_only and rep.owner_repo:
+        lines.append("Found by searching; check this is the one in the video.")
     lines += ["", f"2. What it does: {rep.what}"]
-    lines += ["", f"3. Where it fits you: {rep.impact}", f"4. Usage: {_usage_lines(rep.usage)}"]
+    lines += ["", f"3. Where it fits you: {rep.impact}", f"4. Token usage and setup: {_usage_lines(rep.usage)}"]
     if manual:
         lines.append(f"⚠️ This {TYPES[rep.type]} contains code that the scan can't judge. I did not read or run "
                      f"it. Read the files named in the safety line first. No Adopt button for this one. "
@@ -428,12 +428,13 @@ def format_report(rep: CandidateReport) -> tuple[str, str | None]:
     return (text if len(text) <= MAX_TEXT else text[:MAX_TEXT - 1] + "…"), line
 
 
-def format_factcheck(verdict: Verdict, tail: str = "", saw: str = "") -> str:
-    """The short, separate fact-check message."""
-    lines = [plain_sentence(verdict.summary, 400) or "No summary."]
+def format_factcheck(verdict: Verdict, tail: str = "", saw: str = "", lead: str = "") -> str:
+    """The short message for a video with no report: no tool, or no repo could be found."""
+    lines = [lead] if lead else []
+    lines.append(plain_sentence(verdict.summary, 400) or "No summary.")
     if verdict.claims:
         lines += ["", "Was the video telling the truth?"]
-        for c in verdict.claims[:6]:
+        for c in verdict.claims[:3]:
             lines.append(f"{_ICONS.get(c.verdict, '❔')} {plain(c.text, 140)} ({c.verdict})")
         lines.append("Sources are what the AI cited, not proof.")
     if saw:
