@@ -35,6 +35,7 @@ const URL_RE = /https?:\/\/[^\s<>"')\]]+/i; // same pattern as reelay/cloud/job.
 const NO_LINK_REPLY = "Send me a video or a link to a Reel/TikTok/Short.";
 const NOT_VIDEO_REPLY =
   "That file isn't a video. Send me a video or a link to a Reel/TikTok/Short.";
+const PHOTO_REPLY = "I can't read photos yet. Send me a video or a link to a Reel/TikTok/Short.";
 const TOO_BIG_REPLY =
   "That video is over the 20 MB limit for Telegram bots, so I can't open it. Send a link to it, or a shorter clip.";
 const REQUIRED = [
@@ -42,6 +43,7 @@ const REQUIRED = [
   "OWNER_TELEGRAM_ID",
   "WEBHOOK_SECRET",
   "RELAY_SECRET",
+  "PUBLIC_URL",
   "ROUTINE_FIRE_URL",
   "ROUTINE_TOKEN",
 ];
@@ -95,12 +97,25 @@ export function makeHandler(deps: Deps): Handler {
   const say = (chat_id: number, t: string, extra: Json = {}) =>
     tg("sendMessage", { chat_id, text: t, ...extra });
 
-  async function status(origin: string): Promise<Response> {
+  // The webhook always points at the owner's own PUBLIC_URL, never at whatever origin asked.
+  // This page is public, so an arbitrary Host must not be able to re-point the bot.
+  function publicUrl(): string | null {
+    try {
+      const u = new URL((env("PUBLIC_URL") ?? "").trim());
+      if (u.protocol !== "https:" || u.search || u.hash) return null;
+      return u.origin;
+    } catch {
+      return null;
+    }
+  }
+
+  async function status(): Promise<Response> {
     const missing = REQUIRED.filter((n) => !env(n));
+    const base = publicUrl();
     let hook = false;
-    if (env("TELEGRAM_BOT_TOKEN") && env("WEBHOOK_SECRET")) {
+    if (base && env("TELEGRAM_BOT_TOKEN") && env("WEBHOOK_SECRET")) {
       const r = await tg("setWebhook", {
-        url: `${origin}/telegram`,
+        url: `${base}/telegram`,
         secret_token: env("WEBHOOK_SECRET"),
         allowed_updates: ["message", "callback_query"],
       });
@@ -112,6 +127,8 @@ export function makeHandler(deps: Deps): Handler {
       : `<h1>Not connected yet</h1>${
         missing.length
           ? `<p>Missing environment variables: ${missing.join(", ")}</p>`
+          : !base
+          ? "<p>PUBLIC_URL must be this app's https address, for example https://my-app.deno.net</p>"
           : "<p>Telegram did not accept the webhook. Check TELEGRAM_BOT_TOKEN.</p>"
       }`;
     return new Response(
@@ -259,9 +276,14 @@ export function makeHandler(deps: Deps): Handler {
 
   async function ownerMessage(msg: Json, updateId: number, origin: string) {
     const chat: number = msg.chat.id;
-    const files = [msg.video, msg.document, msg.animation].filter((f) => f?.file_id);
+    const files = [msg.video, msg.video_note, msg.document, msg.animation].filter((f) =>
+      f?.file_id
+    );
     const text_: string = String(msg.text ?? msg.caption ?? "");
-    if (!text_ && !files.length) return;
+    if (!text_ && !files.length) {
+      if (Array.isArray(msg.photo) && msg.photo.length) await say(chat, PHOTO_REPLY);
+      return;
+    }
     if (!files.length && /^\/goals(@\w+)?(\s|$)/.test(text_.trim())) {
       return void await goalsCommand(chat, text_.trim().replace(/^\/goals(@\w+)?/, "").trim());
     }
@@ -274,7 +296,7 @@ export function makeHandler(deps: Deps): Handler {
 
     const isReport = !files.length && /^\/report(@\w+)?(\s|$)/.test(text_.trim());
     if (isReport) { // one repo, one routine run
-      if (!/^\/report(@\w+)?\s+[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*$/.test(text_.trim())) {
+      if (!/^\/report(@\w+)?\s+[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9][\w.-]*$/.test(text_.trim())) {
         return void await say(
           chat,
           "Send /report owner/repo, for example /report anthropics/skills",
@@ -731,7 +753,7 @@ export function makeHandler(deps: Deps): Handler {
     const path = url.pathname;
     try {
       if (path === "/") {
-        return req.method === "GET" ? await status(url.origin) : text("method not allowed", 405);
+        return req.method === "GET" ? await status() : text("method not allowed", 405);
       }
       if (path === "/telegram") {
         if (req.method !== "POST") return text("method not allowed", 405);

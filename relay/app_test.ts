@@ -7,6 +7,7 @@ const ENV: Record<string, string> = {
   RELAY_SECRET: "relsec",
   ROUTINE_FIRE_URL: "https://fire.example/run",
   ROUTINE_TOKEN: "rtok",
+  PUBLIC_URL: "https://relay.example",
 };
 
 interface Call {
@@ -318,6 +319,41 @@ Deno.test("status page hides values, lists missing names, sets webhook", async (
   assertEq(page.includes("Connected ✓"), false);
   assertEq(page.includes("whsec"), false);
   t2.done();
+});
+
+Deno.test("status page never re-points the webhook to the requesting origin", async () => {
+  const t = await setup();
+  await t.handler(new Request("https://evil.example/"));
+  const urls = t.calls.filter((c) => c.url.endsWith("/setWebhook")).map((c) => c.body.url);
+  assertEq(urls, ["https://relay.example/telegram"]);
+  t.done();
+
+  const { PUBLIC_URL: _, ...env } = ENV;
+  const t2 = await setup(env);
+  const page = await (await t2.handler(new Request("https://evil.example/"))).text();
+  assertEq(t2.calls.some((c) => c.url.endsWith("/setWebhook")), false);
+  assertEq(page.includes("PUBLIC_URL"), true);
+  assertEq(page.includes("Connected ✓"), false);
+  t2.done();
+});
+
+Deno.test("round video notes run like videos; a caption-less photo gets one line", async () => {
+  const t = await setup();
+  await t.hook(msg(1, 42, { video_note: { file_id: "vn", file_size: 1000 } }));
+  assertEq(fires(t).length, 1);
+  assertEq(JSON.parse(fires(t)[0].body.text).file.file_id, "vn");
+  await t.hook(msg(2, 42, { photo: [{ file_id: "p", file_size: 10 }] }));
+  assertEq(fires(t).length, 1);
+  assertEq(t.sent().some((x: string) => x.includes("photos")), true);
+  t.done();
+});
+
+Deno.test("/report owner with an underscore is refused before any run", async () => {
+  const t = await setup();
+  await t.hook(msg(1, 42, { text: "/report a_b/c" }));
+  assertEq(fires(t).length, 0);
+  assertEq(t.sent()[0].startsWith("Send /report owner/repo"), true);
+  t.done();
 });
 
 Deno.test("unknown path 404, wrong method 405", async () => {

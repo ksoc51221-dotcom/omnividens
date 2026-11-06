@@ -8,7 +8,7 @@ from reelay.cloud.relay import RelayError, check_relay_url
 
 _URL = re.compile(r"https?://[^\s<>\"')\]]+", re.IGNORECASE)
 _GH_LINK = re.compile(r"(?<![\w.-])https://github\.com/[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]*", re.IGNORECASE)
-_GH_BARE = re.compile(r"(?<![\w.-])(?:www\.)?github\.com/([A-Za-z0-9][A-Za-z0-9-]*)/([A-Za-z0-9][A-Za-z0-9._-]*)", re.IGNORECASE)
+_GH_BARE = re.compile(r"(?:(?<![\w./-])|(?<=https://)|(?<=http://))(?:www\.)?github\.com/([A-Za-z0-9][A-Za-z0-9-]*)/([A-Za-z0-9][A-Za-z0-9._-]*)", re.IGNORECASE)
 
 
 _BUNDLE_ID = re.compile(r"[\w-]{1,64}")

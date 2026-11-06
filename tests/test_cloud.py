@@ -772,3 +772,21 @@ def test_oversized_clone_is_killed_while_cloning(monkeypatch, tmp_path):
     with pytest.raises(Exception, match="50 MB"):
         report._hardened_clone("https://github.com/a/b", tmp_path / "c", timeout_s=20)
     assert killed
+
+
+# ---- T28 ----
+def test_t28_missing_verdict_keeps_the_bundle_frames(fake, tmp_path):
+    relay, _ = fake
+    _write_report_dir(tmp_path, {"reports": []})
+    frames = [{"time_s": float(i), "path": str(tmp_path / f"f{i}.jpg")} for i in range(30)]
+    (tmp_path / "bundle.json").write_text(json.dumps({"frames": frames, "transcript": "t", "caption": "", "duration_s": 60}))
+    (tmp_path / "verdict.json").unlink()
+    run_report(relay, tmp_path)
+    assert relay.sent and not any("No frames were extracted" in m[1] for m in relay.sent)
+
+
+def test_t28_bare_github_needs_a_clean_start():
+    assert github_links("https://evil.com/github.com/o/r") == []
+    assert github_links("https://github.com/o/r") == ["https://github.com/o/r"]
+    assert github_links("see github.com/o/r") == ["https://github.com/o/r"]
+    assert github_links("http://github.com/o/r") == ["https://github.com/o/r"]
