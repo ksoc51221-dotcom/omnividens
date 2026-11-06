@@ -16,7 +16,7 @@ from reelay.core.reports import MAX_REPORTS, plain
 
 DEFAULT_SEC_PER_FIND = 90  # a first guess, not measured; replaced by the last measured run (see report.py)
 MIN_MINUTES = 2
-MAX_SEC_PER_FIND = 3600
+MAX_SEC_PER_FIND = 600
 
 
 def sec_per_find(profile: dict) -> float:
