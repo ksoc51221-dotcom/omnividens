@@ -71,7 +71,7 @@ YouTube answers cloud downloads with "confirm you're not a bot". With this on, t
    ```
    Then lock the file down: `chmod 600 ~/.reelay/config.toml`.
 4. **Start it:** `reelay mac-worker install` (checks the relay once a minute while your Mac is awake and logged in; `reelay mac-worker remove` stops it). Needs `yt-dlp` and `ffmpeg` on the Mac. Optional: `faster-whisper` with its model already downloaded gives transcripts for videos without captions; nothing is ever sent to Groq or OpenAI.
-5. **How it behaves:** one yt-dlp attempt per link, never retried. If the Mac is asleep the relay keeps the link for 24 hours (a claim lasts 15 minutes, two attempts), then tells you and asks you to resend. If the school network blocks or rate-limits the Mac too, you get that reason in Telegram.
+5. **How it behaves:** one yt-dlp attempt per link, never retried. If the Mac is asleep the relay keeps the link for 24 hours (a claim lasts 15 minutes, two attempts), then tells you and asks you to resend. If the Mac's network blocks or rate-limits the Mac too, you get that reason in Telegram.
 6. Expiry messages are sent when anything next hits the relay (a message, a worker poll) and by a 10-minute cron if your Deno Deploy supports `Deno.cron`. Without cron an expiry message can arrive late. A queued job's database row is kept for 7 days in the database so the message still goes out the next time anything touches the relay.
 
 ## If something goes wrong

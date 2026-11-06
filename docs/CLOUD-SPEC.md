@@ -1,6 +1,6 @@
 # Omnividens Cloud (decided 3 Nov 2026)
 
-Why: school Wi-Fi (Securly) intercepts `api.telegram.org`, and the owner won't use a VPN, a hotspot or a Mac left on 24/7. So the bot moves to the cloud.
+Why: a network that intercepts TLS (re-signs `api.telegram.org`) breaks a bot running on a laptop, and the owner won't use a VPN, a hotspot or a Mac left on 24/7. So the bot moves to the cloud.
 
 ## Flow
 
