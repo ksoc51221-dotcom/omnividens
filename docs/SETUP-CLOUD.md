@@ -25,7 +25,7 @@ About 15 minutes. Do the steps in order.
 3. **Relay settings** (your app → Settings → Environment Variables). Add each as a **Secret**, with the Production and Development contexts on:
    - `TELEGRAM_BOT_TOKEN`: from @BotFather.
    - `WEBHOOK_SECRET` and `RELAY_SECRET`: from step 1.
-   - `PUBLIC_URL`: the production URL from step 2, for example `https://my-app.deno.net`. The status page sets the Telegram webhook to this address only, so nobody else can re-point your bot.
+   - `PUBLIC_URL`: the production URL from step 2, for example `https://my-app.deno.net`. Opening the status page sets the Telegram webhook to this address, and only this one. Without it the page changes nothing, so an existing bot keeps working, but a new bot gets no webhook until you add it and open the page once.
    - Leave `OWNER_TELEGRAM_ID` out for now.
 4. **Routine trigger.** Open the routine Claude made (claude.ai/code/routines), then **Add trigger → API**.
    - Copy the fire URL into the relay variable `ROUTINE_FIRE_URL`.

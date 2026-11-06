@@ -15,12 +15,13 @@ Deno Deploy, so your Mac does not need to be on.
    - `OWNER_TELEGRAM_ID` (leave empty at first, see step 6)
    - `WEBHOOK_SECRET` any long random string you invent
    - `RELAY_SECRET` another long random string; the routine uses it to call the relay
-   - `PUBLIC_URL` this app's own https address (for example `https://my-app.deno.net`); the webhook is always set to it
+   - `PUBLIC_URL` this app's own https address (for example `https://my-app.deno.net`); needed to set or move the webhook, and the webhook is only ever set to it
    - `ROUTINE_FIRE_URL` and `ROUTINE_TOKEN` from your Claude Code routine's API trigger
    - `MAX_RUNS_PER_HOUR` optional, default 20
 5. Open your app's production URL. The page shows **Connected ✓** once everything is set. If not, it
-   lists the missing variable names (never the values). Opening the page also registers the Telegram
-   webhook, and it is safe to reload.
+   lists the missing variable names (never the values). With `PUBLIC_URL` set, opening the page registers
+   the Telegram webhook there, and it is safe to reload. Without it the page only checks the webhook and
+   changes nothing.
 6. No owner ID yet? Message your bot `/start`. It answers "Your Telegram ID is N." Put N in
    `OWNER_TELEGRAM_ID` and redeploy.
 

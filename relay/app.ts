@@ -32,7 +32,17 @@ const MAX_BUNDLE_BODY = 1_500_000;
 const BUNDLE_ID_RE = /^[\w-]{1,64}$/;
 const FAIL_REASONS = ["blocked", "rate_limited", "bad_link", "network", "too_long", "other"];
 const URL_RE = /https?:\/\/[^\s<>"')\]]+/i; // same pattern as reelay/cloud/job.py, which reads the link
-const NO_LINK_REPLY = "Send me a video or a link to a Reel/TikTok/Short.";
+const NO_LINK_REPLY =
+  "Send me a video or a link to a Reel/TikTok/Short. /help lists what I can do.";
+const HELP_REPLY =
+  `Send me a video (up to 20 MB) or a link to a Reel, TikTok or Short. I fact-check it and report on any GitHub tools it mentions. Each one takes a few minutes and uses your Claude usage.
+
+/report owner/repo: report on one GitHub repo. This also uses your Claude usage.
+/goals: show your goals. Put lines after it to replace them, or "clear" to delete them.
+/projects: show your projects. Put lines after it to replace them, or "clear" to delete them.
+/help: show this list.
+
+Adopt never installs anything. It only gives you a git clone line to run yourself.`;
 const NOT_VIDEO_REPLY =
   "That file isn't a video. Send me a video or a link to a Reel/TikTok/Short.";
 const PHOTO_REPLY = "I can't read photos yet. Send me a video or a link to a Reel/TikTok/Short.";
@@ -43,7 +53,6 @@ const REQUIRED = [
   "OWNER_TELEGRAM_ID",
   "WEBHOOK_SECRET",
   "RELAY_SECRET",
-  "PUBLIC_URL",
   "ROUTINE_FIRE_URL",
   "ROUTINE_TOKEN",
 ];
@@ -97,8 +106,9 @@ export function makeHandler(deps: Deps): Handler {
   const say = (chat_id: number, t: string, extra: Json = {}) =>
     tg("sendMessage", { chat_id, text: t, ...extra });
 
-  // The webhook always points at the owner's own PUBLIC_URL, never at whatever origin asked.
-  // This page is public, so an arbitrary Host must not be able to re-point the bot.
+  // This page is public, so opening it must never move the bot to whatever origin asked: a preview
+  // deployment or an arbitrary Host. Only an explicit PUBLIC_URL sets the webhook, and only to itself.
+  // Without one the page just reads Telegram's current state, so an existing webhook stays as it is.
   function publicUrl(): string | null {
     try {
       const u = new URL((env("PUBLIC_URL") ?? "").trim());
@@ -109,27 +119,40 @@ export function makeHandler(deps: Deps): Handler {
     }
   }
 
-  async function status(): Promise<Response> {
+  async function status(origin: string): Promise<Response> {
     const missing = REQUIRED.filter((n) => !env(n));
     const base = publicUrl();
-    let hook = false;
-    if (base && env("TELEGRAM_BOT_TOKEN") && env("WEBHOOK_SECRET")) {
-      const r = await tg("setWebhook", {
-        url: `${base}/telegram`,
-        secret_token: env("WEBHOOK_SECRET"),
-        allowed_updates: ["message", "callback_query"],
-      });
-      hook = r?.ok === true;
+    const badUrl = !base && (env("PUBLIC_URL") ?? "").trim() !== "";
+    let hook: "here" | "elsewhere" | "none" | "refused" = "refused";
+    if (env("TELEGRAM_BOT_TOKEN") && env("WEBHOOK_SECRET")) {
+      if (base) {
+        const r = await tg("setWebhook", {
+          url: `${base}/telegram`,
+          secret_token: env("WEBHOOK_SECRET"),
+          allowed_updates: ["message", "callback_query"],
+        });
+        if (r?.ok === true) hook = "here";
+      } else {
+        const r = await tg("getWebhookInfo", {});
+        if (r?.ok === true) {
+          const url = r.result?.url;
+          hook = !url ? "none" : url === `${origin}/telegram` ? "here" : "elsewhere";
+        }
+      }
     }
-    const ok = missing.length === 0 && hook;
+    const ok = missing.length === 0 && !badUrl && hook === "here";
     const body = ok
       ? "<h1>Connected ✓</h1><p>Send your bot a message on Telegram.</p>"
       : `<h1>Not connected yet</h1>${
         missing.length
           ? `<p>Missing environment variables: ${missing.join(", ")}</p>`
-          : !base
+          : badUrl
           ? "<p>PUBLIC_URL must be this app's https address, for example https://my-app.deno.net</p>"
-          : "<p>Telegram did not accept the webhook. Check TELEGRAM_BOT_TOKEN.</p>"
+          : hook === "none"
+          ? "<p>The Telegram webhook isn't set. Add PUBLIC_URL (this app's production https address) and reload this page once.</p>"
+          : hook === "elsewhere"
+          ? "<p>The Telegram webhook points at a different address, which is expected on a preview. If this is your production address, add PUBLIC_URL and reload this page once.</p>"
+          : "<p>Telegram did not accept the request. Check TELEGRAM_BOT_TOKEN.</p>"
       }`;
     return new Response(
       `<!doctype html><meta charset="utf-8"><title>Omnividens relay</title>${body}`,
@@ -283,6 +306,9 @@ export function makeHandler(deps: Deps): Handler {
     if (!text_ && !files.length) {
       if (Array.isArray(msg.photo) && msg.photo.length) await say(chat, PHOTO_REPLY);
       return;
+    }
+    if (!files.length && /^\/(help|start)(@\w+)?(\s|$)/.test(text_.trim())) {
+      return void await say(chat, HELP_REPLY);
     }
     if (!files.length && /^\/goals(@\w+)?(\s|$)/.test(text_.trim())) {
       return void await goalsCommand(chat, text_.trim().replace(/^\/goals(@\w+)?/, "").trim());
@@ -753,7 +779,7 @@ export function makeHandler(deps: Deps): Handler {
     const path = url.pathname;
     try {
       if (path === "/") {
-        return req.method === "GET" ? await status() : text("method not allowed", 405);
+        return req.method === "GET" ? await status(url.origin) : text("method not allowed", 405);
       }
       if (path === "/telegram") {
         if (req.method !== "POST") return text("method not allowed", 405);
