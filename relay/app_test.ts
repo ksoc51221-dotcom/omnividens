@@ -17,6 +17,12 @@ interface Call {
   body?: any;
 }
 
+// A stalled server: only the request's own signal can end the wait.
+const neverAnswers = (init?: RequestInit) =>
+  new Promise<Response>((_, reject) => {
+    init?.signal?.addEventListener("abort", () => reject(init.signal!.reason));
+  });
+
 async function setup(
   env: Record<string, string> = ENV,
   fire = 200,
@@ -26,11 +32,12 @@ async function setup(
   const clock = { t: 3600000 * 100 };
   const calls: Call[] = [];
   let ids = 0;
-  const hooks: { beforeFire?: () => Promise<void> } = {};
+  const hooks: { beforeFire?: () => Promise<void>; stall?: (url: string) => boolean } = {};
   const fakeFetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
     calls.push({ url, init, body });
+    if (hooks.stall?.(url)) return neverAnswers(init);
     if (url === env.ROUTINE_FIRE_URL) {
       await hooks.beforeFire?.();
       return Promise.resolve(new Response("SECRET BODY", { status: fire }));
@@ -917,6 +924,106 @@ Deno.test("an expired job that was ready gets the right reason", async () => {
   t.clock.t += 25 * 3600 * 1000 - 3600 * 1000 * 0; // cap hour rolled over, but expiry comes first in the sweep
   await t.handler.sweep();
   if (!t.sent().at(-1)!.includes("hourly run limit")) throw new Error(t.sent().at(-1));
+  assertEq(fires(t).length, 1);
+  t.done();
+});
+
+// Runs the real code with its real timeout values recorded, but expiring at once.
+async function withShortTimeouts(fn: (asked: number[]) => Promise<void>) {
+  const real = AbortSignal.timeout;
+  const asked: number[] = [];
+  AbortSignal.timeout = (ms: number) => {
+    asked.push(ms);
+    return real(5);
+  };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const guard = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("a stalled call was never given up on")), 3000);
+  });
+  try {
+    await Promise.race([fn(asked), guard]);
+  } finally {
+    clearTimeout(timer);
+    AbortSignal.timeout = real;
+  }
+}
+const FIRE_URL = ENV.ROUTINE_FIRE_URL;
+const UNREACHABLE = "Could not start the analysis (routine unreachable).";
+
+Deno.test("stalled Telegram: gives up after 15 s, no throw, the run still starts", async () => {
+  await withShortTimeouts(async (asked) => {
+    const t = await setup();
+    t.hooks.stall = (url) => url.includes("api.telegram.org");
+    assertEq((await t.hook(msg(1, 42))).status, 200);
+    assertEq(asked.includes(15_000), true);
+    assertEq(fires(t).length, 1);
+    t.done();
+  });
+});
+
+Deno.test("stalled routine: gives up after 30 s with the existing failure message", async () => {
+  await withShortTimeouts(async (asked) => {
+    const t = await setup();
+    t.hooks.stall = (url) => url === FIRE_URL;
+    assertEq((await t.hook(msg(1, 42))).status, 200);
+    assertEq(asked.includes(30_000), true);
+    assertEq(t.sent().at(-1), UNREACHABLE);
+    t.done();
+  });
+});
+
+Deno.test("everything stalled: the webhook still answers 200", async () => {
+  await withShortTimeouts(async () => {
+    const t = await setup();
+    t.hooks.stall = () => true;
+    assertEq((await t.hook(msg(1, 42))).status, 200);
+    t.done();
+  });
+});
+
+Deno.test("double fire: Telegram retrying a slow update does not fire again", async () => {
+  await withShortTimeouts(async () => {
+    const t = await setup();
+    t.hooks.stall = (url) => url === FIRE_URL;
+    await t.hook(msg(1, 42));
+    t.hooks.stall = undefined;
+    assertEq((await t.hook(msg(1, 42))).status, 200);
+    assertEq(fires(t).length, 1);
+    t.done();
+  });
+});
+
+Deno.test("double fire: a Mac job whose fire timed out is not fired again", async () => {
+  await withShortTimeouts(async () => {
+    const t = await setup(MENV);
+    await t.defer(JOB);
+    const c = await (await t.mac("/api/mac/next")).json();
+    t.hooks.stall = (url) => url === FIRE_URL;
+    assertEq((await t.mac("/api/mac/bundle", "POST", bundleBody(50, c.lease))).status, 200);
+    assertEq(t.sent().at(-1)!.includes("could not start the analysis"), true);
+    t.hooks.stall = undefined;
+    // the worker repeating its upload, then later sweeps
+    const again = await t.mac("/api/mac/bundle", "POST", bundleBody(50, c.lease));
+    assertEq(again.status, 409);
+    assertEq((await t.mac("/api/mac/next")).status, 204);
+    await t.hook(msg(78, 999));
+    assertEq(fires(t).length, 1);
+    t.done();
+  });
+});
+
+Deno.test("/report owner/repo.git is refused before any rate slot or run", async () => {
+  const t = await setup();
+  for (const [i, name] of ["a/b.git", "a/b.GIT"].entries()) {
+    await t.hook(msg(i + 1, 42, { text: `/report ${name}` }));
+    assertEq(t.sent().at(-1)!.startsWith("Send /report owner/repo"), true);
+  }
+  assertEq(fires(t).length, 0);
+  const slots = [];
+  for await (const e of t.kv.list({ prefix: ["rate"] })) slots.push(e);
+  assertEq(slots.length, 0);
+  // a name merely containing .git is a real repo
+  await t.hook(msg(3, 42, { text: "/report a/b.github.io" }));
   assertEq(fires(t).length, 1);
   t.done();
 });

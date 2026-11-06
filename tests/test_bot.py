@@ -237,3 +237,22 @@ def test_t22_failed_download_removes_temp_dir(setup):
 
     asyncio.run(handle_update(bot, fake_update("1", video=Bad())))
     assert made and not made[0].exists()
+
+
+@pytest.mark.parametrize("text, url, note", [
+    ("watch (https://youtu.be/abc)", "https://youtu.be/abc", "watch ()"),
+    ("https://youtu.be/abc.", "https://youtu.be/abc", ""),
+    ("HTTPS://youtu.be/abc", "HTTPS://youtu.be/abc", ""),
+])
+def test_t34_links_parse_like_the_cloud(text, url, note):
+    job = message_to_job(Incoming("1", text))
+    assert job.kind is JobKind.VIDEO
+    assert job.url == url
+    assert job.text == note
+
+
+def test_t34_forwarded_link_keeps_only_the_clean_link():
+    job = message_to_job(Incoming("1", "look (https://youtu.be/abc)", forwarded=True))
+    assert job.url == "https://youtu.be/abc"
+    assert job.text == ""
+
