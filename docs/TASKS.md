@@ -64,3 +64,4 @@ Searched GitHub for Telegram/video/sandbox skills: only 0–2 star repos, not us
 | T28 | Bugs 6-10 from the bug hunt, including GET / re-pointing the webhook | see `docs/reviews/t28.md` | T27 | peer | merged |
 | T33 | Safety NO sends one short message; a summary message comes first, ending "I'll scan it and write the report. About N min." (N from measured run times) | `reelay/core/reports.py`, `reelay/cloud/`, `routine/PROMPT.md`, `docs/CLOUD-SPEC.md`, tests | T30 | T8 | merged |
 | T32 | Adopt installs one skill on the Mac. On hold until after submission, not merged | `agent/t32-install` | T30 | peer | on hold |
+| T34 | Low-risk fixes from the code analysis: relay call timeouts, refuse `.git` in `/report`, local bot uses `first_url` | see `docs/reviews/t34.md` | T28 | orchestrator | merged |
