@@ -15,7 +15,7 @@ Why: a network that intercepts TLS (re-signs `api.telegram.org`) breaks a bot ru
 3. **Routine** (Claude Code scheduled task, API trigger, fresh Ubuntu VM per run)
    - A setup script installs ffmpeg and yt-dlp.
    - Runs the existing pipeline: video → frames + transcript → fact-check (the subscription, no API key) → trial in this disposable VM → one report back through the relay.
-   - Typed instructions mean "work on the GitHub repo and open a draft PR".
+   - Typed instructions are not implemented in cloud mode yet (local mode has them). A message is handled as a video link or file, or as `/report owner/repo` (analyse one repo, read-only). Nothing opens a pull request.
 
 ## Keeps
 
