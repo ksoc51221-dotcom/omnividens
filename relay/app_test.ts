@@ -157,12 +157,45 @@ Deno.test("text is capped at 4000 chars", async () => {
 
 Deno.test("text with nothing to work on answers without a run or a rate slot", async () => {
   const t = await setup({ ...ENV, MAX_RUNS_PER_HOUR: "1" });
-  for (const [i, text] of ["/start", "hello", "/vibe"].entries()) {
+  for (const [i, text] of ["hello", "/vibe", "/helpful"].entries()) {
     await t.hook(msg(i + 1, 42, { text }));
-    assertEq(t.sent().at(-1), "Send me a video or a link to a Reel/TikTok/Short.");
+    assertEq(
+      t.sent().at(-1),
+      "Send me a video or a link to a Reel/TikTok/Short. /help lists what I can do.",
+    );
   }
   assertEq(fires(t).length, 0);
   await t.hook(msg(9, 42)); // the one slot in this hour is still free
+  assertEq(fires(t).length, 1);
+  t.done();
+});
+
+Deno.test("/help and /start list every command without a run or a rate slot", async () => {
+  const t = await setup({ ...ENV, MAX_RUNS_PER_HOUR: "1" });
+  const asks = ["/help", "/help@omnividens_bot", "/start", "/start abc"];
+  for (const [i, text] of asks.entries()) {
+    await t.hook(msg(i + 1, 42, { text }));
+    const reply = t.sent().at(-1)!;
+    for (const command of ["/report owner/repo", "/goals", "/projects", "/help"]) {
+      assertEq(reply.includes(command), true);
+    }
+  }
+  assertEq(t.sent().length, asks.length);
+  assertEq(fires(t).length, 0);
+  await t.hook(msg(9, 42)); // the one slot in this hour is still free
+  assertEq(fires(t).length, 1);
+  t.done();
+});
+
+Deno.test("/help from a stranger gets no reply; a video captioned /help still runs", async () => {
+  const t = await setup();
+  await t.hook(msg(1, 77, { text: "/help" }));
+  assertEq(t.sent().length, 0);
+  await t.hook(msg(2, 42, {
+    text: undefined,
+    caption: "/help",
+    video: { file_id: "v", file_size: 1000, mime_type: "video/mp4" },
+  }));
   assertEq(fires(t).length, 1);
   t.done();
 });

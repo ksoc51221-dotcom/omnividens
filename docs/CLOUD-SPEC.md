@@ -79,6 +79,7 @@ Create the GitHub repo, sign in to Deno Deploy with GitHub, and paste the secret
   - Non-owner: ignored with 200 (except the ID hint when the owner is unset).
   - `callback_query` `adopt:<id>`: replies with the stored clone line (KV `adopt/<id>`). `skip:<id>`: replies "Skipped." Both answer the callback.
   - Owner message (text, video, document, animation):
+    - `/help` or `/start` with no file: reply with the list of commands. No routine run, no rate slot used.
     - Nothing a run could work on (no link, no `/report owner/repo`, and no video file of 20 MB or less): reply with what to send instead. No routine run, no rate slot used.
     - Over `MAX_RUNS_PER_HOUR`: reply "Busy, try again later".
     - Otherwise reply "Got it. Takes a few minutes.", then `POST ROUTINE_FIRE_URL` with `Authorization: Bearer ROUTINE_TOKEN`, `anthropic-beta: experimental-cc-routine-2026-04-01`, `content-type: application/json`, body `{"text": "<JOB JSON>"}`.

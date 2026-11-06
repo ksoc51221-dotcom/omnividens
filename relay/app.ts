@@ -32,7 +32,17 @@ const MAX_BUNDLE_BODY = 1_500_000;
 const BUNDLE_ID_RE = /^[\w-]{1,64}$/;
 const FAIL_REASONS = ["blocked", "rate_limited", "bad_link", "network", "too_long", "other"];
 const URL_RE = /https?:\/\/[^\s<>"')\]]+/i; // same pattern as reelay/cloud/job.py, which reads the link
-const NO_LINK_REPLY = "Send me a video or a link to a Reel/TikTok/Short.";
+const NO_LINK_REPLY =
+  "Send me a video or a link to a Reel/TikTok/Short. /help lists what I can do.";
+const HELP_REPLY =
+  `Send me a video (up to 20 MB) or a link to a Reel, TikTok or Short. I fact-check it and report on any GitHub tools it mentions. Each one takes a few minutes and uses your Claude usage.
+
+/report owner/repo: report on one GitHub repo. This also uses your Claude usage.
+/goals: show your goals. Put lines after it to replace them, or "clear" to delete them.
+/projects: show your projects. Put lines after it to replace them, or "clear" to delete them.
+/help: show this list.
+
+Adopt never installs anything. It only gives you a git clone line to run yourself.`;
 const NOT_VIDEO_REPLY =
   "That file isn't a video. Send me a video or a link to a Reel/TikTok/Short.";
 const TOO_BIG_REPLY =
@@ -262,6 +272,9 @@ export function makeHandler(deps: Deps): Handler {
     const files = [msg.video, msg.document, msg.animation].filter((f) => f?.file_id);
     const text_: string = String(msg.text ?? msg.caption ?? "");
     if (!text_ && !files.length) return;
+    if (!files.length && /^\/(help|start)(@\w+)?(\s|$)/.test(text_.trim())) {
+      return void await say(chat, HELP_REPLY);
+    }
     if (!files.length && /^\/goals(@\w+)?(\s|$)/.test(text_.trim())) {
       return void await goalsCommand(chat, text_.trim().replace(/^\/goals(@\w+)?/, "").trim());
     }
