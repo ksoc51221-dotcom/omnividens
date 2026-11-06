@@ -12,7 +12,7 @@ Built for the November 2026 hackathon. The Python package and CLI are still call
 
 - 🎬 **Watches** a TikTok link or an uploaded video file: downloads it, samples frames, and gets a transcript (native subtitles, or free on-VM Whisper when there are none).
 - 🔎 **Fact-checks** the claims it hears, with timestamps and sources found by web search, written for your profile (goals + a chill / balanced / hype vibe).
-- 🧪 **Scans** the GitHub repo a video is selling: a static safety scan plus a read of the code, then a one-line fit verdict. You get **Adopt / Skip** buttons. Adopt never installs anything; it prints a strict `git clone` line you run yourself.
+- 🧪 **Scans** the GitHub repo a video is selling: a static safety scan plus a read of the code, then a one-line fit verdict. Only a skill with no code and a clean scan gets **Adopt / Skip** buttons; one that contains code gets a warning and a clone line to run by hand, no buttons. Adopt never installs anything; it prints a strict `git clone` line you run yourself.
 
 ## How it fits together
 

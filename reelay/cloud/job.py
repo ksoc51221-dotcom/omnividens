@@ -7,8 +7,11 @@ from dataclasses import dataclass
 from reelay.cloud.relay import RelayError, check_relay_url
 
 _URL = re.compile(r"https?://[^\s<>\"')\]]+", re.IGNORECASE)
-_GH_LINK = re.compile(r"https://github\.com/[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*", re.IGNORECASE)
-_GH_BARE = re.compile(r"\b(?:www\.)?github\.com/([A-Za-z0-9][A-Za-z0-9._-]*)/([A-Za-z0-9][A-Za-z0-9._-]*)", re.IGNORECASE)
+_GH_LINK = re.compile(r"(?<![\w.-])https://github\.com/[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]*", re.IGNORECASE)
+_GH_BARE = re.compile(r"(?<![\w.-])(?:www\.)?github\.com/([A-Za-z0-9][A-Za-z0-9-]*)/([A-Za-z0-9][A-Za-z0-9._-]*)", re.IGNORECASE)
+
+
+_BUNDLE_ID = re.compile(r"[\w-]{1,64}")
 
 
 @dataclass
@@ -20,6 +23,7 @@ class Job:
     file_id: str | None
     relay_url: str
     raw: dict
+    bundle_id: str | None = None  # set when the owner's Mac already fetched the video
 
 
 def _int(v) -> int:
@@ -41,10 +45,13 @@ def parse_job(text: str) -> Job:
     file_id = f.get("file_id") if isinstance(f, dict) else None
     if file_id is not None and (not isinstance(file_id, str) or not 0 < len(file_id) <= 300):
         raise RelayError("bad file id")
+    bundle_id = d.get("bundle_id")
+    if bundle_id is not None and (not isinstance(bundle_id, str) or not _BUNDLE_ID.fullmatch(bundle_id)):
+        raise RelayError("bad bundle id")
     msg = d.get("text")
     return Job(chat_id=_int(d.get("chat_id")), message_id=_int(d.get("message_id", 0)),
                update_id=_int(d.get("update_id", 0)), text=msg[:4000] if isinstance(msg, str) else "",
-               file_id=file_id, relay_url=relay_url, raw=d)
+               file_id=file_id, relay_url=relay_url, raw=d, bundle_id=bundle_id)
 
 
 def first_url(text: str) -> str | None:

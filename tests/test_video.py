@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from reelay.video import VideoError, DownloadError, FrameError, NetworkError, TooLongError, load_video
+from reelay.video import BadLinkError, BlockedError, RateLimitedError, VideoError, DownloadError, FrameError, NetworkError, TooLongError, load_video
 from reelay.video import download as dl
 from reelay.video import pipeline
-from reelay.video.frames import plan_times
-from reelay.video.transcript import parse_vtt
+from reelay.video.frames import find_scene_cuts, plan_times
+from reelay.video.transcript import parse_vtt, read_subtitle
 
 needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg missing")
 
@@ -95,7 +95,7 @@ def test_missing_file_is_download_error(tmp_path):
 def test_failed_download_raises_with_user_message(tmp_path):
     with pytest.raises(DownloadError) as err:
         dl.download("http://127.0.0.1:9/none", tmp_path, timeout_s=30)
-    assert "screen recording" in err.value.user_message
+    assert "video file" in err.value.user_message
 
 
 @needs_ffmpeg
@@ -128,6 +128,40 @@ def test_filtered_download_raises_too_long(tmp_path, monkeypatch):
     with pytest.raises(TooLongError) as err:
         dl.download("https://example.com/v", tmp_path)
     assert "too long" in err.value.user_message
+
+
+@pytest.mark.parametrize("line", [
+    "[download] x does not pass filter (duration<=?600 & !is_live), skipping ..",
+    "[download] File is larger than max-filesize (31457280 bytes > 1024 bytes). Aborting.",
+])
+def test_too_long_is_found_on_stdout_where_ytdlp_prints_it(tmp_path, monkeypatch, line):
+    class Proc:
+        returncode, stdout, stderr = 0, line, ""
+    monkeypatch.setattr(dl, "_run_group", lambda *a, **k: Proc())
+    monkeypatch.setattr(dl, "is_private_host", lambda u: False)
+    with pytest.raises(TooLongError):
+        dl.download("https://example.com/v", tmp_path)
+
+
+def _clip(path, *meta):
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                    "-f", "lavfi", "-i", "color=red:d=1:s=64x64:r=10",
+                    "-f", "lavfi", "-i", "color=blue:d=1:s=64x64:r=10",
+                    "-filter_complex", "[0][1]concat=n=2:v=1", *meta, str(path)], check=True)
+    return path
+
+
+@needs_ffmpeg
+def test_scene_cuts_are_still_found_in_real_ffmpeg_output(tmp_path):
+    cuts = find_scene_cuts(_clip(tmp_path / "cut.mp4"))
+    assert len(cuts) == 1 and 0.8 <= cuts[0] <= 1.2
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("title", [b"title=caf\xe9\xff", b"title=pts_time:1.2.3", b"title=pts_time:99999"])
+def test_metadata_cannot_crash_or_fake_scene_cuts(tmp_path, title):
+    cuts = find_scene_cuts(_clip(tmp_path / "meta.mkv", b"-metadata", title))
+    assert len(cuts) == 1 and 0.8 <= cuts[0] <= 1.2
 
 
 def test_download_passes_caps_to_ytdlp(tmp_path, monkeypatch):
@@ -185,12 +219,99 @@ def test_network_failure_names_host_and_never_suggests_insecure(stderr, tmp_path
     assert "certificate" not in msg.lower() and "insecure" not in msg.lower()
 
 
-def test_unsupported_page_keeps_screen_recording_advice(tmp_path, monkeypatch):
+def test_unsupported_page_is_a_bad_link(tmp_path, monkeypatch):
     _fake_ytdlp(monkeypatch, "ERROR: Unsupported URL: https://example.com/page")
-    with pytest.raises(DownloadError) as err:
+    with pytest.raises(BadLinkError) as err:
         dl.download("https://example.com/page", tmp_path)
     assert not isinstance(err.value, NetworkError)
-    assert "screen recording" in err.value.user_message
+    assert "private, removed or not supported" in err.value.user_message
+
+
+@pytest.mark.parametrize("stderr", [
+    "ERROR: [youtube] abc: Sign in to confirm you're not a bot. Use --cookies-from-browser",
+    "ERROR: [youtube] abc: Sign in to confirm you\u2019re not a bot",
+    "ERROR: [youtube] abc: Sign in to confirm that you are not a bot",
+])
+def test_bot_check_is_blocked_error(stderr, tmp_path, monkeypatch):
+    _fake_ytdlp(monkeypatch, stderr)
+    with pytest.raises(BlockedError) as err:
+        dl.download("https://www.youtube.com/watch?v=abc", tmp_path)
+    assert "YouTube blocks downloads from the cloud" in err.value.cloud_message
+    assert "hotspot" not in err.value.cloud_message and "hotspot" not in err.value.user_message
+
+
+def test_http_429_is_rate_limited(tmp_path, monkeypatch):
+    _fake_ytdlp(monkeypatch, "ERROR: unable to download video data: HTTP Error 429: Too Many Requests")
+    with pytest.raises(RateLimitedError) as err:
+        dl.download("https://www.youtube.com/watch?v=abc", tmp_path)
+    assert "rate limiting" in err.value.user_message
+
+
+@pytest.mark.parametrize("stderr", [
+    "ERROR: [youtube] abc: Private video. Sign in if you've been granted access",
+    "ERROR: [youtube] abc: Video unavailable. This video has been removed by the uploader",
+])
+def test_private_or_removed_is_bad_link(stderr, tmp_path, monkeypatch):
+    _fake_ytdlp(monkeypatch, stderr)
+    with pytest.raises(BadLinkError):
+        dl.download("https://www.youtube.com/watch?v=abc", tmp_path)
+
+
+def test_age_check_is_not_mistaken_for_bot_check(tmp_path, monkeypatch):
+    _fake_ytdlp(monkeypatch, "ERROR: [youtube] abc: Sign in to confirm your age")
+    with pytest.raises(BadLinkError):
+        dl.download("https://www.youtube.com/watch?v=abc", tmp_path)
+
+
+def test_network_error_has_separate_cloud_wording(tmp_path, monkeypatch):
+    _fake_ytdlp(monkeypatch, "ERROR: Connection refused")
+    with pytest.raises(NetworkError) as err:
+        dl.download("https://videos.example.com/a.mp4", tmp_path)
+    assert "hotspot" in err.value.user_message
+    assert "videos.example.com" in err.value.cloud_message and "hotspot" not in err.value.cloud_message
+    assert err.value.host == "videos.example.com"
+
+
+def test_subtitle_langs_are_explicit_and_one_attempt(tmp_path, monkeypatch):
+    seen = {}
+    def fake(cmd, timeout_s):
+        seen["cmd"] = cmd
+        raise dl.subprocess.TimeoutExpired(cmd, 1)
+    monkeypatch.setattr(dl, "_run_group", fake)
+    monkeypatch.setattr(dl, "is_private_host", lambda u: False)
+    with pytest.raises(NetworkError):
+        dl.download("https://example.com/v", tmp_path)
+    cmd = seen["cmd"]
+    assert cmd[cmd.index("--sub-langs") + 1] == "en,en-US,en-GB,en-orig"
+    assert "en.*" not in cmd
+    for flag in ("--retries", "--fragment-retries", "--extractor-retries"):
+        assert cmd[cmd.index(flag) + 1] == "0"
+
+
+def test_en_orig_alone_still_gives_a_transcript(tmp_path, monkeypatch):
+    """Plain `en` got HTTP 429 but `en-orig` arrived: the picker takes whichever .vtt exists."""
+    (tmp_path / "video.mp4").write_bytes(b"x" * 10)
+    (tmp_path / "video.en-orig.vtt").write_text(VTT)
+    _fake_ytdlp(monkeypatch, "ERROR: Unable to download video subtitles for 'en': HTTP Error 429: Too Many Requests")
+    got = dl.download("https://www.youtube.com/watch?v=abc", tmp_path)
+    assert got.subtitle.name == "video.en-orig.vtt"
+    assert read_subtitle(got.subtitle) == "[0:01] hello there friend"
+
+
+def test_picker_prefers_plain_english_and_copes_with_none(tmp_path):
+    assert dl.pick_subtitle(tmp_path) is None
+    for n in ("video.en-orig.vtt", "video.en-GB.vtt", "video.fr.vtt"):
+        (tmp_path / n).write_text(VTT)
+    assert dl.pick_subtitle(tmp_path).name == "video.en-GB.vtt"
+    (tmp_path / "video.en.vtt").write_text(VTT)
+    assert dl.pick_subtitle(tmp_path).name == "video.en.vtt"
+
+
+def test_video_without_any_captions_still_downloads(tmp_path, monkeypatch):
+    (tmp_path / "video.mp4").write_bytes(b"x" * 10)
+    _fake_ytdlp(monkeypatch, "ERROR: Unable to download video subtitles for 'en': HTTP Error 429")
+    got = dl.download("https://www.youtube.com/watch?v=abc", tmp_path)
+    assert got.video.name == "video.mp4" and got.subtitle is None
 
 
 def test_missing_duration_is_not_rejected(clip, tmp_path, monkeypatch):

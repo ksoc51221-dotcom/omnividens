@@ -79,6 +79,8 @@ Create the GitHub repo, sign in to Deno Deploy with GitHub, and paste the secret
   - Non-owner: ignored with 200 (except the ID hint when the owner is unset).
   - `callback_query` `adopt:<id>`: replies with the stored clone line (KV `adopt/<id>`). `skip:<id>`: replies "Skipped." Both answer the callback.
   - Owner message (text, video, document, animation):
+    - `/help` or `/start` with no file: reply with the list of commands. No routine run, no rate slot used.
+    - Nothing a run could work on (no link, no `/report owner/repo`, and no video file of 20 MB or less): reply with what to send instead. No routine run, no rate slot used.
     - Over `MAX_RUNS_PER_HOUR`: reply "Busy, try again later".
     - Otherwise reply "Got it. Takes a few minutes.", then `POST ROUTINE_FIRE_URL` with `Authorization: Bearer ROUTINE_TOKEN`, `anthropic-beta: experimental-cc-routine-2026-04-01`, `content-type: application/json`, body `{"text": "<JOB JSON>"}`.
     - On a fire failure, tell the owner in one plain line.
@@ -97,5 +99,24 @@ Create the GitHub repo, sign in to Deno Deploy with GitHub, and paste the secret
   - Fetches the profile.
   - Writes `<workdir>/job.json` and `bundle.json` (frames paths, transcript, caption, links found).
   - Exits 0. On failure: sends a plain error via `/api/send`, exits 2.
-- The routine (Claude) reads the bundle, fact-checks per `reelay/factcheck/prompt.py`, optionally trials a found GitHub tool inside the VM, and writes `<workdir>/verdict.json` in the schema `reelay/factcheck/parse.py` validates.
-- `python -m reelay.cloud report <workdir>`: validates `verdict.json` with the existing parser, formats ONE report with the existing formatting, sends it via `/api/send` (with `adopt_line` when a repo was found), updates the profile.
+- The routine (Claude) reads the bundle and first looks for GitHub candidates. If it finds any, it skips claim checking (`claims: []`, no web search) and writes a short report per candidate; with no candidates it fact-checks per `reelay/factcheck/prompt.py`. It reads (never runs) each clone, and writes `<workdir>/verdict.json` in the schema `reelay/factcheck/parse.py` validates.
+- `python -m reelay.cloud report <workdir>`: validates `verdict.json` with the existing parser, formats ONE report with the existing formatting, sends it via `/api/send`, updates the profile. `adopt_line` (the Adopt/Skip buttons) is set only for a skill or mod with confirmed identity, file evidence, safety YES and no code in the repo. A skill with code the scan can't judge (UNSURE) gets NO buttons (`adopt_line` null): the report text warns that the code was not read or run, names the files to read first, and shows the `git clone -- https://github.com/owner/repo` line for the owner to run by hand. Per-candidate report: name and exact owner/repo, safety line, two-sentence summary, usage (token cost measured by the report step from `SKILL.md` sizes in its own clone, about bytes / 4; falls back to the model's number labelled as an estimate), and impact ("Could help <project>: ..." or doesn't fit). Old `problem`/`pros`/`cons`/`examples` fields are accepted and ignored. No empty fact-check section when `claims` is empty.
+
+## Mac fallback (T25, 5 Nov 2026)
+
+YouTube answers the cloud VM with "confirm you're not a bot". The owner's Mac can fetch the same link, so a blocked link goes to a queue the Mac polls. The Mac only fetches: no model, no routine (a model reading hostile text stays on the disposable VM). The video never leaves the Mac; frames and transcript do.
+
+**Flow:** `prepare` gets `BlockedError` for a link job → `POST /api/defer` (RELAY_SECRET) → relay queues it and tells the user (Mac seen in the last 3 minutes: "your Mac is fetching this one"; otherwise "your Mac isn't online (last seen …), I'll keep this for 24 hours") → `prepare` exits 3 → Mac `GET /api/mac/next` claims it → downloads, samples frames (scene cuts, thinned with `plan_times` to 20, 512 px, ≤50 KB each) → `POST /api/mac/bundle` → relay stores it and fires the routine with the original JOB plus `bundle_id` (same hourly cap) → `prepare` sees `bundle_id`, fetches `GET /api/bundle/<id>` (RELAY_SECRET), validates and writes `bundle.json` and the frames itself → unchanged fact-check, Adopt gate and reports. A job with `bundle_id` is never deferred again.
+
+**Env:** `MAC_SECRET`, used by the `/api/mac/*` routes only. `RELAY_SECRET` opens none of them and `MAC_SECRET` opens nothing else. Unset means the Mac routes are closed and `/api/defer` answers `{"queued": false}` (the user gets the plain "blocked from the cloud" reply).
+
+**Routes**
+- `POST /api/defer` (RELAY_SECRET) `{"job": JOB}`. Owner chat only, link jobs only (no `file`, no `bundle_id`), one queue entry per `update_id` (a repeat answers `duplicate`). Returns `{"queued": bool, "online": bool}`.
+- `GET /api/mac/next` (MAC_SECRET): records the heartbeat, sweeps, claims the oldest queued job with a 15-minute lease. 204 if none. Returns `{update_id, lease, attempt, job}`. Two attempts; a job whose second lease runs out is dropped and the user told.
+- `POST /api/mac/bundle` (MAC_SECRET) `{update_id, lease, meta:{duration_s, transcript, caption}, frames:[{time_s, jpeg_b64}]}`. At most 20 frames, each a JPEG (magic bytes checked) of at most 50,000 bytes, stored as separate KV values (KV values max 64 KiB); transcript trimmed to 24,000 chars and caption to 3,000 so metadata fits one value; body at most 1.5 MB. Expires in 24 h. A stale lease gets 409. If the hourly cap is full the bundle waits and fires on the next sweep.
+- `POST /api/mac/fail` (MAC_SECRET) `{update_id, lease, reason: blocked|rate_limited|bad_link|network|too_long|other, host?}`: the relay writes the user's message from a fixed table (no Mac text is relayed) and drops the job.
+- `GET /api/bundle/<id>` (RELAY_SECRET): the routine reads the upload.
+
+**Expiry:** a job lives 24 h from queueing, then the user is told, naming the link, and asked to resend. The KV row lives 48 h so a sweep can still find it. Sweeps run on every Telegram webhook, every worker poll, and a 10-minute `Deno.cron` if the platform has it (unstable API, enabled in `relay/deno.json`; not verified live on this Deploy setup). Without cron the message can be late when nothing touches the relay.
+
+**Errors (Python):** `BlockedError` (bot check), `RateLimitedError` (HTTP 429 on the video), `BadLinkError` (private, removed, unsupported), `NetworkError` (host unreachable). Each has `user_message` (local mode) and `cloud_message` where the advice differs. yt-dlp runs once with all retries off; subtitles ask for `en,en-US,en-GB,en-orig` only and whichever `.vtt` arrives is used. No captions means the report says so.
