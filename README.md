@@ -85,7 +85,7 @@ An **Opus orchestrator** session wrote the spec, the shared contract and the tas
 
 What review caught, for example: the bot **downloaded files from strangers before checking pairing**; the sandbox's blanket `Read` rule would have let a malicious skill read `~/.ssh`; the Adopt message could have printed a `git clone --upload-pack=…` line built from a video-supplied URL.
 
-**Why the cloud pivot:** the owner's school network redirects Telegram's DNS to a filter that re-signs TLS, so a bot running on a school laptop can't verify Telegram. Rather than disable certificate checks or route around the filter, the bot moved off the laptop entirely (see [docs/CLOUD-SPEC.md](docs/CLOUD-SPEC.md)).
+**Why the cloud pivot:** some networks intercept TLS and re-sign it, so a bot running on a laptop behind one can't verify Telegram's certificate. Rather than disable certificate checks or route around the interception, the bot moved off the laptop entirely (see [docs/CLOUD-SPEC.md](docs/CLOUD-SPEC.md)).
 
 ## Limitations
 
