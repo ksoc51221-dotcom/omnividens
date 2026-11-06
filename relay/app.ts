@@ -11,6 +11,9 @@ export interface Deps {
 const ADOPT_RE =
   /^git clone -- https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9-]*\/(?!\.{1,2}$)[A-Za-z0-9._-]+$/;
 const FILE_ID_RE = /^[\w-]{1,256}$/;
+// A stalled service must not hold the webhook open. Each timeout takes that call's normal failure path.
+const TG_TIMEOUT_MS = 15_000;
+const FIRE_TIMEOUT_MS = 30_000;
 const MAX_FILE = 20 * 1024 * 1024;
 const MAX_PROFILE = 64 * 1024;
 const MAX_PROJECT_LINES = 20;
@@ -97,6 +100,7 @@ export function makeHandler(deps: Deps): Handler {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
+        signal: AbortSignal.timeout(TG_TIMEOUT_MS),
       });
       return await r.json();
     } catch {
@@ -265,6 +269,7 @@ export function makeHandler(deps: Deps): Handler {
           "content-type": "application/json",
         },
         body: JSON.stringify({ text: JSON.stringify(job) }),
+        signal: AbortSignal.timeout(FIRE_TIMEOUT_MS),
       });
       if (!r.ok) code = r.status;
       await r.body?.cancel();
@@ -325,7 +330,12 @@ export function makeHandler(deps: Deps): Handler {
 
     const isReport = !files.length && /^\/report(@\w+)?(\s|$)/.test(text_.trim());
     if (isReport) { // one repo, one routine run
-      if (!/^\/report(@\w+)?\s+[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9][\w.-]*$/.test(text_.trim())) {
+      const t = text_.trim();
+      // prepare.py refuses .git names too, so don't spend a run finding that out.
+      if (
+        !/^\/report(@\w+)?\s+[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9][\w.-]*$/.test(t) ||
+        /\.git$/i.test(t)
+      ) {
         return void await say(
           chat,
           "Send /report owner/repo, for example /report anthropics/skills",

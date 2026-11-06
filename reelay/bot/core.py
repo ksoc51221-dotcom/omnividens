@@ -4,17 +4,16 @@ The Telegram library lives in `telegram_layer.py`; this file only deals in plain
 `Incoming` / `Reply` objects, so it can be tested without a network.
 """
 
-import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from reelay.bot.pairing import Pairing
+from reelay.cloud.job import first_url
 from reelay.core.types import Job, JobKind
 
 ADOPT = "adopt"
 SKIP = "skip"
-_URL = re.compile(r"https?://\S+")
 
 
 @dataclass
@@ -34,15 +33,16 @@ class Reply:
 
 def message_to_job(msg: Incoming) -> Job:
     """A file or link is a video job; anything else is an instruction for the AI."""
-    match = _URL.search(msg.text)
+    url = first_url(msg.text)
     if msg.forwarded:  # keep the link or file, drop the forwarded words
-        msg = Incoming(msg.user_id, "" if match is None else match.group(), msg.file)
-        match = _URL.search(msg.text)
+        msg = Incoming(msg.user_id, url or "", msg.file)
     if msg.file is not None:
         return Job(msg.user_id, JobKind.VIDEO, text=msg.text, file=msg.file)
-    if match:
-        note = (msg.text[:match.start()] + msg.text[match.end():]).strip()
-        return Job(msg.user_id, JobKind.VIDEO, text=note, url=match.group())
+    if url:
+        note = msg.text.replace(url, "", 1).strip()
+        if not any(c.isalnum() for c in note):  # only the link's leftover punctuation
+            note = ""
+        return Job(msg.user_id, JobKind.VIDEO, text=note, url=url)
     return Job(msg.user_id, JobKind.INSTRUCTION, text=msg.text.strip())
 
 
@@ -69,7 +69,7 @@ class ReelayBot:
             return None  # ignore strangers silently
         if not msg.text.strip() and msg.file is None:
             return Reply("Send me a video link, a video file, or a message.")
-        if msg.forwarded and msg.file is None and not _URL.search(msg.text):
+        if msg.forwarded and msg.file is None and not first_url(msg.text):
             return Reply("That's a forwarded message. Tell me in your own words what to do with it.")
         job = message_to_job(msg)
         self.on_job(job)
