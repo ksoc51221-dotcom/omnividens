@@ -142,9 +142,12 @@ def run(workdir: str, relay_factory=Relay, cloner=_hardened_clone) -> int:
     try:
         try:
             bundle_d = json.loads((work / "bundle.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            bundle_d = None
+        try:  # read apart from the bundle: a missing verdict must not discard the frames
             raw = (work / "verdict.json").read_text(encoding="utf-8")
         except (OSError, ValueError):
-            bundle_d, raw = None, ""
+            raw = ""
         if not isinstance(bundle_d, dict):
             bundle_d = {}
         frames = [Frame(float(f.get("time_s") or 0), Path(str(f.get("path"))))

@@ -45,6 +45,7 @@ const HELP_REPLY =
 Adopt never installs anything. It only gives you a git clone line to run yourself.`;
 const NOT_VIDEO_REPLY =
   "That file isn't a video. Send me a video or a link to a Reel/TikTok/Short.";
+const PHOTO_REPLY = "I can't read photos yet. Send me a video or a link to a Reel/TikTok/Short.";
 const TOO_BIG_REPLY =
   "That video is over the 20 MB limit for Telegram bots, so I can't open it. Send a link to it, or a shorter clip.";
 const REQUIRED = [
@@ -105,24 +106,56 @@ export function makeHandler(deps: Deps): Handler {
   const say = (chat_id: number, t: string, extra: Json = {}) =>
     tg("sendMessage", { chat_id, text: t, ...extra });
 
+  // This page is public, so opening it must never move the bot to whatever origin asked: a preview
+  // deployment or an arbitrary Host. The webhook is set only when this page is served from PUBLIC_URL,
+  // so a typo or a preview can't move the bot or change its secret. Anywhere else the page just reads
+  // Telegram's current state, so an existing webhook stays as it is.
+  function publicUrl(): string | null {
+    try {
+      const u = new URL((env("PUBLIC_URL") ?? "").trim());
+      if (u.protocol !== "https:" || u.search || u.hash) return null;
+      return u.origin;
+    } catch {
+      return null;
+    }
+  }
+
   async function status(origin: string): Promise<Response> {
     const missing = REQUIRED.filter((n) => !env(n));
-    let hook = false;
+    const base = publicUrl();
+    const badUrl = !base && (env("PUBLIC_URL") ?? "").trim() !== "";
+    let hook: "here" | "elsewhere" | "none" | "refused" = "refused";
     if (env("TELEGRAM_BOT_TOKEN") && env("WEBHOOK_SECRET")) {
-      const r = await tg("setWebhook", {
-        url: `${origin}/telegram`,
-        secret_token: env("WEBHOOK_SECRET"),
-        allowed_updates: ["message", "callback_query"],
-      });
-      hook = r?.ok === true;
+      if (base === origin) {
+        const r = await tg("setWebhook", {
+          url: `${base}/telegram`,
+          secret_token: env("WEBHOOK_SECRET"),
+          allowed_updates: ["message", "callback_query"],
+        });
+        if (r?.ok === true) hook = "here";
+      } else {
+        const r = await tg("getWebhookInfo", {});
+        if (r?.ok === true) {
+          const url = r.result?.url;
+          hook = !url ? "none" : url === `${origin}/telegram` ? "here" : "elsewhere";
+        }
+      }
     }
-    const ok = missing.length === 0 && hook;
+    const ok = missing.length === 0 && !badUrl && hook === "here";
     const body = ok
       ? "<h1>Connected ✓</h1><p>Send your bot a message on Telegram.</p>"
       : `<h1>Not connected yet</h1>${
         missing.length
           ? `<p>Missing environment variables: ${missing.join(", ")}</p>`
-          : "<p>Telegram did not accept the webhook. Check TELEGRAM_BOT_TOKEN.</p>"
+          : badUrl
+          ? "<p>PUBLIC_URL must be this app's https address, for example https://my-app.deno.net</p>"
+          : base && base !== origin
+          ? "<p>PUBLIC_URL is a different address from this page, so the webhook was not changed. Open the page at that address, or correct PUBLIC_URL.</p>"
+          : hook === "none"
+          ? "<p>The Telegram webhook isn't set. Add PUBLIC_URL (this app's production https address) and reload this page once.</p>"
+          : hook === "elsewhere"
+          ? "<p>The Telegram webhook points at a different address, which is expected on a preview. If this is your production address, add PUBLIC_URL and reload this page once.</p>"
+          : "<p>Telegram did not accept the request. Check TELEGRAM_BOT_TOKEN.</p>"
       }`;
     return new Response(
       `<!doctype html><meta charset="utf-8"><title>Omnividens relay</title>${body}`,
@@ -269,9 +302,14 @@ export function makeHandler(deps: Deps): Handler {
 
   async function ownerMessage(msg: Json, updateId: number, origin: string) {
     const chat: number = msg.chat.id;
-    const files = [msg.video, msg.document, msg.animation].filter((f) => f?.file_id);
+    const files = [msg.video, msg.video_note, msg.document, msg.animation].filter((f) =>
+      f?.file_id
+    );
     const text_: string = String(msg.text ?? msg.caption ?? "");
-    if (!text_ && !files.length) return;
+    if (!text_ && !files.length) {
+      if (Array.isArray(msg.photo) && msg.photo.length) await say(chat, PHOTO_REPLY);
+      return;
+    }
     if (!files.length && /^\/(help|start)(@\w+)?(\s|$)/.test(text_.trim())) {
       return void await say(chat, HELP_REPLY);
     }
@@ -287,7 +325,7 @@ export function makeHandler(deps: Deps): Handler {
 
     const isReport = !files.length && /^\/report(@\w+)?(\s|$)/.test(text_.trim());
     if (isReport) { // one repo, one routine run
-      if (!/^\/report(@\w+)?\s+[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*$/.test(text_.trim())) {
+      if (!/^\/report(@\w+)?\s+[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9][\w.-]*$/.test(text_.trim())) {
         return void await say(
           chat,
           "Send /report owner/repo, for example /report anthropics/skills",

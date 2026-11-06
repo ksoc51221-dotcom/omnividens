@@ -69,10 +69,11 @@ Create the GitHub repo, sign in to Deno Deploy with GitHub, and paste the secret
 - `ROUTINE_FIRE_URL`
 - `ROUTINE_TOKEN`
 - `MAX_RUNS_PER_HOUR` (default 20)
+- `PUBLIC_URL` (optional): the app's production https address. Needed only to set or move the webhook.
 
 **Relay routes:**
 
-- `GET /`: idempotently calls Telegram `setWebhook(url=<own origin>/telegram, secret_token=WEBHOOK_SECRET, allowed_updates=["message","callback_query"])`. Shows an HTML status page ("Connected ✓" / which env vars are missing, never their values).
+- `GET /`: served from `PUBLIC_URL`, idempotently calls Telegram `setWebhook(url=<PUBLIC_URL>/telegram, secret_token=WEBHOOK_SECRET, allowed_updates=["message","callback_query"])`. Anywhere else, or with no `PUBLIC_URL`, only reads `getWebhookInfo` and never changes the webhook, so a redeploy, a preview link or a typo can't move the bot. Shows an HTML status page ("Connected ✓" / which env vars are missing, never their values).
 - `POST /telegram`: Telegram webhook.
   - Rejects a wrong `X-Telegram-Bot-Api-Secret-Token` with 401.
   - Dedupes by `update_id` (KV, 24 h).

@@ -17,9 +17,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from reelay.cloud.job import first_url
@@ -144,13 +144,19 @@ def local_only_transcript(work: Path, model_factory=None, timeout_s: int = WHISP
                  for s in segments if s.text.strip()]
         return "\n".join(lines)[:MAX_CHARS]
 
-    pool = ThreadPoolExecutor(max_workers=1)
-    try:
-        return pool.submit(run).result(timeout=timeout_s)
-    except Exception:  # noqa: BLE001 - timeout, model not cached, bad audio: just no transcript
-        return ""
-    finally:
-        pool.shutdown(wait=False, cancel_futures=True)
+    box: dict[str, str] = {}
+
+    def target() -> None:
+        try:
+            box["text"] = run()
+        except Exception:  # noqa: BLE001 - model not cached, bad audio: just no transcript
+            pass
+
+    # A daemon thread is not joined at interpreter exit, so a hung model cannot keep the process alive.
+    t = threading.Thread(target=target, daemon=True)
+    t.start()
+    t.join(timeout_s)
+    return "" if t.is_alive() else box.get("text", "")
 
 
 def build_upload(bundle, transcript: str) -> tuple[dict, list[dict]]:

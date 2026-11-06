@@ -384,3 +384,20 @@ def test_install_and_remove_use_own_label_and_leave_bot_agent_alone(tmp_path, mo
     assert mac_worker.remove(run, tmp_path) == "" and not p.exists()
     assert bot_plist.read_text() == "bot"
     assert all("com.reelay.bot" not in " ".join(c) for c in calls)
+
+
+def test_t28_hung_model_does_not_keep_the_process_alive(tmp_path):
+    import subprocess, sys, textwrap, time
+    (tmp_path / "v.mp4").write_bytes(b"x")
+    code = textwrap.dedent(f"""
+        import time, pathlib
+        from reelay.cloud import mac_worker
+        class Hung:
+            def transcribe(self, path, **kw):
+                time.sleep(8)
+        assert mac_worker.local_only_transcript(pathlib.Path({str(tmp_path)!r}), model_factory=Hung, timeout_s=1) == ""
+    """)
+    t0 = time.time()
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    assert time.time() - t0 < 5

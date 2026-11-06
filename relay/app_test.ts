@@ -7,6 +7,7 @@ const ENV: Record<string, string> = {
   RELAY_SECRET: "relsec",
   ROUTINE_FIRE_URL: "https://fire.example/run",
   ROUTINE_TOKEN: "rtok",
+  PUBLIC_URL: "https://relay.example",
 };
 
 interface Call {
@@ -16,7 +17,11 @@ interface Call {
   body?: any;
 }
 
-async function setup(env: Record<string, string> = ENV, fire = 200) {
+async function setup(
+  env: Record<string, string> = ENV,
+  fire = 200,
+  webhookInfo: Record<string, unknown> = { ok: true, result: { url: "" } },
+) {
   const kv = await Deno.openKv(":memory:");
   const clock = { t: 3600000 * 100 };
   const calls: Call[] = [];
@@ -36,6 +41,7 @@ async function setup(env: Record<string, string> = ENV, fire = 200) {
         Response.json({ ok: true, result: { file_path: "v/a.mp4", file_size: size } }),
       );
     }
+    if (url.endsWith("/getWebhookInfo")) return Promise.resolve(Response.json(webhookInfo));
     if (url.includes("/file/bot")) return Promise.resolve(new Response("VIDEOBYTES"));
     return Promise.resolve(Response.json({ ok: true, result: true }));
   };
@@ -351,6 +357,110 @@ Deno.test("status page hides values, lists missing names, sets webhook", async (
   assertEq(page.includes("Connected ✓"), false);
   assertEq(page.includes("whsec"), false);
   t2.done();
+});
+
+Deno.test("status page never re-points the webhook to the requesting origin", async () => {
+  const t = await setup();
+  await t.handler(new Request("https://relay.example/"));
+  const urls = t.calls.filter((c) => c.url.endsWith("/setWebhook")).map((c) => c.body.url);
+  assertEq(urls, ["https://relay.example/telegram"]);
+  // Any other origin (preview, typo in PUBLIC_URL, arbitrary Host) writes nothing, not even to PUBLIC_URL:
+  // a preview with its own WEBHOOK_SECRET would otherwise lock the production bot out.
+  const other = await (await t.handler(new Request("https://evil.example/"))).text();
+  assertEq(t.calls.filter((c) => c.url.endsWith("/setWebhook")).length, 1);
+  assertEq(other.includes("different address from this page"), true);
+  assertEq(other.includes("relay.example"), false);
+  assertEq(other.includes("Connected ✓"), false);
+  t.done();
+
+  const { PUBLIC_URL: _, ...env } = ENV;
+  const t2 = await setup(env);
+  const page = await (await t2.handler(new Request("https://evil.example/"))).text();
+  assertEq(t2.calls.some((c) => c.url.endsWith("/setWebhook")), false);
+  assertEq(page.includes("PUBLIC_URL"), true);
+  assertEq(page.includes("Connected ✓"), false);
+  t2.done();
+});
+
+// No PUBLIC_URL: the state a deploy is in before the owner adds it.
+const { PUBLIC_URL: _publicUrl, ...NO_PUBLIC_URL } = ENV;
+const hooked = (url: string) => ({ ok: true, result: { url } });
+const webhookWrites = (t: { calls: Call[] }) =>
+  t.calls.filter((c) => /\/(setWebhook|deleteWebhook)$/.test(c.url)).length;
+
+Deno.test("no PUBLIC_URL: a live webhook stays put, whoever opens the page", async () => {
+  const live = "https://relay.example/telegram";
+  const t = await setup(NO_PUBLIC_URL, 200, hooked(live));
+  const prod = await (await t.handler(new Request("https://relay.example/"))).text();
+  assertEq(prod.includes("Connected ✓"), true);
+  const preview = await (await t.handler(new Request("https://preview.example/"))).text();
+  assertEq(preview.includes("Connected ✓"), false);
+  assertEq(preview.includes("different address"), true);
+  assertEq(preview.includes(live), false); // the page never shows the webhook address
+  assertEq(webhookWrites(t), 0);
+  t.done();
+});
+
+Deno.test("no PUBLIC_URL: the status page says how to set a missing webhook", async () => {
+  const t = await setup(NO_PUBLIC_URL);
+  const page = await (await t.handler(new Request("https://relay.example/"))).text();
+  assertEq(page.includes("isn't set"), true);
+  assertEq(page.includes("PUBLIC_URL"), true);
+  assertEq(webhookWrites(t), 0);
+  t.done();
+});
+
+Deno.test("no PUBLIC_URL: everything else still works", async () => {
+  const t = await setup(NO_PUBLIC_URL, 200, hooked("https://relay.example/telegram"));
+  await t.hook(msg(1, 42));
+  assertEq(fires(t).length, 1);
+  await t.hook(msg(2, 42, { text: "/help" }));
+  assertEq(t.sent().at(-1)!.includes("/report owner/repo"), true);
+  assertEq(webhookWrites(t), 0);
+  t.done();
+});
+
+Deno.test("no PUBLIC_URL: Telegram refusing the check is not reported as connected", async () => {
+  const t = await setup(NO_PUBLIC_URL, 200, { ok: false });
+  const page = await (await t.handler(new Request("https://relay.example/"))).text();
+  assertEq(page.includes("Connected ✓"), false);
+  assertEq(page.includes("Telegram did not accept"), true);
+  t.done();
+});
+
+Deno.test("a bad PUBLIC_URL sets nothing, says so and never shows its value", async () => {
+  for (const bad of ["http://relay.example", "not a url", "https://relay.example/?x=1"]) {
+    const t = await setup(
+      { ...ENV, PUBLIC_URL: bad },
+      200,
+      hooked("https://relay.example/telegram"),
+    );
+    const page = await (await t.handler(new Request("https://relay.example/"))).text();
+    assertEq(page.includes("Connected ✓"), false);
+    assertEq(page.includes("must be this app's https address"), true);
+    assertEq(page.includes(bad), false);
+    assertEq(webhookWrites(t), 0);
+    t.done();
+  }
+});
+
+Deno.test("round video notes run like videos; a caption-less photo gets one line", async () => {
+  const t = await setup();
+  await t.hook(msg(1, 42, { video_note: { file_id: "vn", file_size: 1000 } }));
+  assertEq(fires(t).length, 1);
+  assertEq(JSON.parse(fires(t)[0].body.text).file.file_id, "vn");
+  await t.hook(msg(2, 42, { photo: [{ file_id: "p", file_size: 10 }] }));
+  assertEq(fires(t).length, 1);
+  assertEq(t.sent().some((x: string) => x.includes("photos")), true);
+  t.done();
+});
+
+Deno.test("/report owner with an underscore is refused before any run", async () => {
+  const t = await setup();
+  await t.hook(msg(1, 42, { text: "/report a_b/c" }));
+  assertEq(fires(t).length, 0);
+  assertEq(t.sent()[0].startsWith("Send /report owner/repo"), true);
+  t.done();
 });
 
 Deno.test("unknown path 404, wrong method 405", async () => {
