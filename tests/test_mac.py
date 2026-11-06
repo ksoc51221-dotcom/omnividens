@@ -401,3 +401,20 @@ def test_t28_hung_model_does_not_keep_the_process_alive(tmp_path):
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=30)
     assert r.returncode == 0, r.stderr
     assert time.time() - t0 < 5
+
+
+def test_worker_command_uses_the_running_python_not_path():
+    import sys
+    assert mac_worker.worker_command()[:3] == [sys.executable, "-m", "reelay.installer.cli"]
+
+
+def test_plist_keeps_custom_reelay_home(monkeypatch):
+    monkeypatch.setenv("REELAY_HOME", "/tmp/somewhere")
+    data = mac_worker.build_plist(["py", "-m", "x"], "/usr/bin", Path("/tmp/x.log"))
+    assert data["EnvironmentVariables"]["REELAY_HOME"] == "/tmp/somewhere"
+
+
+def test_install_on_other_systems_is_a_message_not_a_traceback(monkeypatch, capsys):
+    monkeypatch.setattr(mac_worker.sys, "platform", "linux")
+    assert mac_worker.main(["install"]) == 1
+    assert "only works on macOS" in capsys.readouterr().out
