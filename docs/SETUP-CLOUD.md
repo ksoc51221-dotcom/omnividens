@@ -5,7 +5,11 @@ About 15 minutes. Do the steps in order.
 
 ## Before you start
 
-Read the step-by-step guide in the README first (`README.md`, "Set it up"). This page is the longer checklist. Where it says "the routine Claude made", you can also create the routine yourself at claude.ai/code/routines: this repository, the prompt from `routine/PROMPT.md`, no connectors. Not run live from a clean account.
+**You need:** a Telegram account (you create your own bot with @BotFather), a GitHub account and your own copy of this repository (fork or copy it; the relay deploys from it), a free Deno Deploy account (console.deno.com, sign in with GitHub), a Claude plan that includes Claude Code routines (claude.ai/code), and a terminal with `openssl` (macOS has it).
+
+**Cost:** the relay and database are free. **Every video you send is one routine run and counts against your Claude plan usage.** Plans have hourly and daily limits, so a run can be refused when you hit them.
+
+You create the routine yourself at claude.ai/code/routines: this repository, the prompt from `routine/PROMPT.md`, no connectors. *Not run live from a clean account: the claude.ai screens may be named differently. If something doesn't match, follow the on-screen labels.*
 
 ## You do
 
@@ -26,7 +30,7 @@ Read the step-by-step guide in the README first (`README.md`, "Set it up"). This
    - `WEBHOOK_SECRET` and `RELAY_SECRET`: from step 1.
    - `PUBLIC_URL`: the production URL from step 2, for example `https://my-app.deno.net`. Opening the status page at this address sets the Telegram webhook to it; opening any other address changes nothing. Without it the page changes nothing, so an existing bot keeps working, but a new bot gets no webhook until you add it and open the page once.
    - Leave `OWNER_TELEGRAM_ID` out for now.
-4. **Routine trigger.** Open the routine Claude made (claude.ai/code/routines), then **Add trigger → API**.
+4. **Routine trigger.** Open your routine (claude.ai/code/routines), then **Add trigger → API**.
    - Copy the fire URL into the relay variable `ROUTINE_FIRE_URL`.
    - Copy the token into `ROUTINE_TOKEN`. The token is shown only once.
 5. **Routine environment** (claude.ai/code → environment **Default**):
@@ -53,7 +57,7 @@ Read the step-by-step guide in the README first (`README.md`, "Set it up"). This
    - Optional: tell the bot what you build so reports can say where a tool fits. Send `/projects` followed by one `Name: one line` per line (up to 20 lines, 200 characters each). `/projects` alone shows the list, `/projects clear` empties it. It is stored in Deno KV and read by the routine, so never put secrets in it.
    - Optional: tell the bot your goals so reports can use them. Send `/goals` followed by up to 5 lines (300 characters each). `/goals` alone shows them, `/goals clear` empties them. Same rule as `/projects`: stored in Deno KV and read by the routine, so never put secrets in it.
    - Reports left out (more than 9 finds, or the daily limit): send `/report owner/repo` for one. Each one starts a new run and uses your Claude usage. The exact repo you type counts as confirmed.
-   - Optional relay env vars: `MAX_REPORTS_PER_DAY` (default 30) caps per-candidate reports a day.
+   - Optional relay env vars: `MAX_RUNS_PER_HOUR` (default 20) caps routine runs per hour; `MAX_REPORTS_PER_DAY` (default 30) caps per-candidate reports a day.
 
 ## Optional: Mac fallback for YouTube (macOS only, uses launchd)
 
