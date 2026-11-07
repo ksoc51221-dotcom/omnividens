@@ -68,4 +68,4 @@ Searched GitHub for Telegram/video/sandbox skills: only 0–2 star repos, not us
 | T35 | README step-by-step setup for a new user | `README.md`, `docs/SETUP-CLOUD.md` | T34 | orchestrator | merged |
 | T36 | Portable Mac worker (runs with `sys.executable`, clear non-macOS message) and its setup guide | `reelay/cloud/mac_worker.py`, `docs/SETUP-MAC-WORKER.md` | T34 | orchestrator | merged |
 | T37 | Plain `/goals` help; `/report <name>` searches GitHub and asks Yes/No before a run | `relay/app.ts`, `relay/app_test.ts` | T34 | T13 | merged |
-| T38 | Tool videos: one-line heads-up with an estimate, then the report; clean search-found repos get Adopt while it only prints a line | `routine/PROMPT.md`, `reelay/core/reports.py`, `reelay/cloud/` | T37 | orchestrator | in progress |
+| T38 | Tool videos: one-line heads-up with an estimate, then the report; clean search-found repos get Adopt while it only prints a line | `routine/PROMPT.md`, `reelay/core/reports.py`, `reelay/cloud/` | T37 | orchestrator | merged |
