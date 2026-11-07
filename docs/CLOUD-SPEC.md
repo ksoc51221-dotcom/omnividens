@@ -15,7 +15,7 @@ Why: a network that intercepts TLS (re-signs `api.telegram.org`) breaks a bot ru
 3. **Routine** (Claude Code scheduled task, API trigger, fresh Ubuntu VM per run)
    - A setup script installs ffmpeg and yt-dlp.
    - Runs the existing pipeline: video → frames + transcript → fact-check (the subscription, no API key) → trial in this disposable VM → one report back through the relay.
-   - Typed instructions are not implemented in cloud mode yet (local mode has them). A message is handled as a video link or file, or as `/report owner/repo` (analyse one repo, read-only). Nothing opens a pull request.
+   - Typed instructions are not implemented in cloud mode yet (local mode has them). A message is handled as a video link or file, or as `/report owner/repo` (analyse one repo, read-only). `/report <name>` (no slash) makes the relay take the top result of one unauthenticated GitHub repo search (10 s timeout), validate it with the owner/repo rules, and ask Yes/No (pending row `["rpick", id]`, 15 min expiry, claimed atomically). Only Yes takes a rate slot and fires; no result, timeout or rate limit gets a plain message. Nothing opens a pull request.
 
 ## Keeps
 
