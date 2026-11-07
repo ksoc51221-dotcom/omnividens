@@ -1,6 +1,6 @@
 # Reelay
 
-Telegram bot connected to the owner's own AI. Share a short video (Reel / TikTok / Short / X): Reelay watches it (frames + transcript), fact-checks the claims for the owner's profile, trials any tool/skill it finds in a sandbox, and replies with a trust receipt and Adopt/Skip. Typed instructions go through a Haiku router to the owner's Claude Code.
+Telegram bot connected to the owner's own AI. Share a short video (Reel / TikTok / Short / X): Omnividens watches it (frames + transcript), finds any tool or skill it names, scans the repo without running it, and replies with a short summary and time estimate, then a report (token estimate, projects it fits, rating out of 10) with Skip and Adopt. A failed scan gets one short warning; a video with no tool gets a short fact-check. Typed instructions go through a Haiku router to the owner's Claude Code.
 
 Hackathon entry, deadline **7 Nov 2026**. Judging: 50% 10-min technical video, 40% GitHub repo, 10% surprise.
 
@@ -29,7 +29,7 @@ Spec `docs/SPEC.md` · Architecture `docs/ARCHITECTURE.md` · Board `docs/TASKS.
 
 ## Status (29 Oct 2026)
 
-- T1–T9 and T11 merged; 310 tests pass. T10 (second adapter: Codex or Gemini) not started, owner hasn't chosen.
+- Oct status, kept for history; see `docs/TASKS.md` for the current board. T10 (second adapter: Codex or Gemini) not started, owner hasn't chosen.
 - Local mode has not run live with Telegram. It can't verify Telegram on a network that intercepts TLS, because the bot trusts only `certifi`; `reelay doctor` reports this. Use another network for local-mode testing.
 - 4 Nov: product renamed Omnividens (package/CLI still `reelay`). Main path is now cloud (relay + Claude Code routine, T23); local mode kept. Private repo github.com/ksoc51221-dotcom/omnividens with CI; make public before 7 Nov. Cloud path ran live end to end on a TikTok on 4 Nov (relay on Deno Deploy, routine on environment `omnividens`). Not yet live: repo scan with Adopt/Skip, file uploads.
 
