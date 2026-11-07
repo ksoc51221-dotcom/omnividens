@@ -44,12 +44,15 @@ KEEP_NAMES = frozenset({
 
 
 def _replace(m: re.Match) -> str:
-    return m.group(0) if m.group(0).lower() in KEEP_NAMES else "[link removed]"
+    return m.group(0) if m.group(0).lower() in KEEP_NAMES else ""
 
 
 def strip_urls(text: str) -> str:
     """Remove links from free model text; vetted URLs live only in sources/candidates."""
-    return re.sub(r"\s+", " ", _URL_IN_TEXT.sub(_replace, text)).replace("]()", "]").strip()
+    out = _URL_IN_TEXT.sub(_replace, text).replace("]()", "]")
+    out = re.sub(r"\(\s*\)|\[\s*\]", "", out)  # brackets a removed link left empty
+    out = re.sub(r"\s+([,.;:!?])", r"\1", re.sub(r"\s+", " ", out))
+    return out.strip()
 
 
 def _addresses(host: str) -> list[str]:

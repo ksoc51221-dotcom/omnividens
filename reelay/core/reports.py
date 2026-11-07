@@ -23,6 +23,7 @@ MAX_REPORTS = 9  # per video
 MAX_TEXT = 3800
 NO_PROJECTS = "No project list yet. Send /projects to add one."
 NO_FIT = "Doesn't fit any of your listed projects."
+UNSAFE_TEXT = "Skill may contain malware like behaviour, it is not safe to install"
 _REPO = re.compile(r"https://github\.com/([A-Za-z0-9][A-Za-z0-9-]*)/([A-Za-z0-9][A-Za-z0-9._-]*)")
 # control chars, plus bidi overrides/isolates and zero-width marks that can hide or reorder text
 _CTRL = re.compile("[\x00-\x1f\x7f\u061c\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]+")
@@ -46,6 +47,40 @@ def plain(value, limit: int) -> str:
         return ""
     s = re.sub(r"\s+", " ", _LINK.sub("", _CTRL.sub(" ", value))).strip()
     return s if len(s) <= limit else s[:limit - 1] + "…"
+
+
+def plain_sentence(value, limit: int) -> str:
+    """Like plain(), but a too-long text is cut at the last sentence end inside the cap, or at a word
+    boundary with an ellipsis when there is none. Never mid-word."""
+    s = plain(value, 10 ** 6)
+    if len(s) <= limit:
+        return s
+    window = s[:limit]
+    ends = [m.end() for m in re.finditer(r"[.!?](?=\s|$)", window)]
+    if s[limit:limit + 1].isspace() and window[-1:] in ".!?":
+        ends.append(limit)
+    if ends:
+        return window[:max(ends)].strip()
+    cut = window[:limit - 1].rsplit(" ", 1)[0] if " " in window[:limit - 1] else window[:limit - 1]
+    return cut.rstrip(" ,;:-") + "…"
+
+
+def parse_not_found(raw) -> list[tuple[str, str]]:
+    """[(name, searched)] from verdict.json `not_found`: hostile input, plain capped strings, max 5."""
+    out = []
+    for item in (raw if isinstance(raw, list) else [])[:30]:
+        if len(out) >= 5:
+            break
+        if not isinstance(item, dict):
+            continue
+        name, searched = plain(item.get("name"), 60), plain(item.get("searched"), 80)
+        if name:
+            out.append((name, searched))
+    return out
+
+
+def not_found_line(name: str, searched: str) -> str:
+    return f"I couldn't find the repo for {name}" + (f" (searched: {searched})" if searched else "")
 
 
 def repo_parts(url) -> tuple[str, str] | None:
@@ -72,6 +107,8 @@ class CandidateReport:
     name_only: bool  # matched from a name only, not a link the video showed
     what: str
     impact: str = NO_FIT
+    projects: list[str] = field(default_factory=list)  # names from the owner's own list only
+    score: int | None = None  # the model's usefulness opinion, 1-10
     usage: dict = field(default_factory=dict)  # validated, every number labelled
     ran: bool = False  # the routine never runs anything; always False
     code_paths: list[str] = field(default_factory=list)  # executable-looking files found in the clone (max 5)
@@ -109,6 +146,19 @@ def _impact(raw, projects: list[str]) -> str:
     return f"Could help {match}: {why}" if match and why else NO_FIT
 
 
+def _fit_projects(raw, projects: list[str]) -> list[str]:
+    """Projects the report names, kept only when they are on the owner's written list, in list order."""
+    if not isinstance(raw, dict):
+        return []
+    named = raw.get("projects") if isinstance(raw.get("projects"), list) else [raw.get("project")]
+    wanted = {plain(n, 80).lower() for n in named[:30]}
+    return [p for p in projects if p.lower() in wanted][:10]
+
+
+def _score(raw) -> int | None:
+    return raw if isinstance(raw, int) and not isinstance(raw, bool) and 1 <= raw <= 10 else None
+
+
 def parse_report(raw, projects: list[str]) -> CandidateReport | None:
     """Validate one report object from the routine. None when it has no usable name and URL."""
     if not isinstance(raw, dict):
@@ -132,8 +182,9 @@ def parse_report(raw, projects: list[str]) -> CandidateReport | None:
         name=name, url=url, type=typ, type_note=plain(raw.get("type_note"), 200), safety=safety,
         safety_reason=reason, owner_repo=owner_repo, name_only=True, model_safety=model_safety,
         claim_matches=claim_matches,
-        what=plain(info.get("what"), 400) or "No description was found.",
-        impact=_impact(raw.get("impact"), projects), usage=_usage(raw.get("usage")))  # old pros/cons/etc. ignored
+        what=plain_sentence(info.get("what"), 400) or "No description was found.",
+        impact=_impact(raw.get("impact"), projects), projects=_fit_projects(raw.get("impact"), projects),
+        score=_score(raw.get("score")), usage=_usage(raw.get("usage")))  # old pros/cons/etc. ignored
 
 
 def type_evidence(clone: Path) -> set[str]:
@@ -274,11 +325,12 @@ def apply_gate(rep: CandidateReport, clone: Path | None, confirmed: set[str],
     if scan == "high" or rep.model_safety == "NO":
         rep.safety = "NO"
         rep.safety_reason = why if scan == "high" else (rep.safety_reason or "The review found risky behaviour.")
-    elif scan == "clean" and rep.model_safety == "YES" and ok_id:
+    elif scan == "clean" and rep.model_safety == "YES" and rep.owner_repo and rep.claim_matches:
+        # ok_id or found by search: Adopt only prints a clone line, and the report names the repo. Revisit before T32.
         rep.safety, rep.safety_reason = "YES", why
     else:
         rep.safety = "UNSURE"
-        if scan in ("clean", "code") and not ok_id:
+        if scan == "clean" and not ok_id:
             rep.safety_reason = "I couldn't confirm this is the exact repo the video meant."
         elif scan == "clean":
             rep.safety_reason = rep.safety_reason or "The scan found nothing, but the review was not sure. I only read the code, I didn't run it."
@@ -295,8 +347,8 @@ def apply_gate(rep: CandidateReport, clone: Path | None, confirmed: set[str],
 
 
 def _adoptable(rep: CandidateReport) -> bool:
-    """A skill/mod backed by files, with an exact repo confirmed by the video or the owner."""
-    return rep.type in ADOPT_TYPES and bool(rep.owner_repo) and not rep.name_only
+    """A skill/mod backed by files, with an exact repo (confirmed, or found by search and named in the report)."""
+    return rep.type in ADOPT_TYPES and bool(rep.owner_repo)
 
 
 def adopt_line(rep: CandidateReport) -> str | None:
@@ -311,7 +363,7 @@ def adopt_line(rep: CandidateReport) -> str | None:
 def manual_line(rep: CandidateReport) -> str | None:
     """Clone line shown as text only (no buttons) for a skill/mod with confirmed identity whose scan was clean
     but which contains code the scan can't judge. The owner runs it by hand after reading the files."""
-    if _adoptable(rep) and rep.safety == "UNSURE" and rep.has_code:
+    if _adoptable(rep) and not rep.name_only and rep.safety == "UNSURE" and rep.has_code:
         return adopt_line_for(rep.url)
     return None
 
@@ -328,30 +380,18 @@ def adopt_note(rep: CandidateReport) -> str | None:
     return "\n".join(parts)
 
 
-def _tokens_text(u: dict) -> str:
+def _tokens_sentence(u: dict, what: str = "skill") -> str:
     m = u.get("measured_tokens")
     if m:
-        if len(m) == 1:
-            return f"About {m[0]:,} tokens each time it loads (measured from SKILL.md)"
-        return (f"{len(m)} skills, about {m[0]:,} to {m[-1]:,} tokens each time one loads "
-                "(measured from SKILL.md files)")
-    lvl = f"{u['level']}, " if u.get("level") else ""
+        size = f"{m[0]:,}" if len(m) == 1 else f"{m[0]:,} to {m[-1]:,}"
+        return f"This {what} consumes approximately {size} tokens for each use"
     if "tokens" in u:
-        return f"AI use {lvl}~{u['tokens']:,} tokens ({u['basis']})"
-    return "AI use " + (f"{u['level']} " if u.get("level") else "") + "(estimate, no token count)"
-
-
-def _usage_lines(u: dict) -> str:
-    setup = f"setup ~{u['setup_minutes']} min (estimate)" if "setup_minutes" in u else "setup time unknown"
-    money = f"money: {u['money']} (estimate)" if u.get("money") else "money unknown (estimate)"
-    return "; ".join([setup, _tokens_text(u), money])
+        return f"This {what} consumes approximately {u['tokens']:,} tokens for each use (estimate)"
+    return f"I don't have a token estimate for this {what}"
 
 
 def unsafe_message(rep: CandidateReport) -> str:
-    # Only our scan's own finding or a fixed phrase: the model's reason may repeat hostile repo text.
-    found = f"the scan flagged it ({rep.scan_problem})" if rep.scan_problem else "the review found risky behaviour"
-    who = rep.owner_repo or plain(rep.name, 60)
-    return f"⛔ {who}: {found}. Don't install it. Nothing was installed."
+    return UNSAFE_TEXT
 
 
 def format_report(rep: CandidateReport) -> tuple[str, str | None]:
@@ -360,43 +400,31 @@ def format_report(rep: CandidateReport) -> tuple[str, str | None]:
         return unsafe_message(rep), None
     line = adopt_line(rep)
     manual = manual_line(rep)
-    ident = rep.owner_repo or "exact repo not confirmed"
-    ident += " (matched from a name only)" if rep.name_only else ""
-    typ = TYPES.get(rep.type, "unclear")
-    lines = [f"{plain(rep.name, 80)} · type: {typ}"]
-    if rep.type == "unclear":
-        lines.append(f"Why unclear: {rep.type_note or 'I could not tell what kind of thing it is.'}")
-    safe = f"1. Is it safe? {rep.safety}: {rep.safety_reason}"
-    if rep.safety == "NO":
-        safe += " I recommend Skip."
-    if rep.commit:
-        ident += f" · scanned commit {rep.commit[:12]}"
-    lines += [safe, f"Repo: {ident}", "",
-              f"2. What it does: {rep.what}"]
-    lines += ["", f"3. Where it fits you: {rep.impact}", f"4. Usage: {_usage_lines(rep.usage)}"]
+    what = "skill" if rep.type in ADOPT_TYPES else "tool"
+    repo = rep.owner_repo or "exact repo not confirmed"
+    if rep.name_only and rep.owner_repo:
+        repo += " (found by searching; check this is the one in the video)"
+    lines = [f"Repo: {repo}", _tokens_sentence(rep.usage, what), f"Projects this {what} can be applied on:"]
+    lines += [f"- {p}" for p in rep.projects] or ["- None of your listed projects"]
+    if rep.score is not None:
+        lines.append(f"This {what} is {rep.score}/10")
     if manual:
-        lines.append(f"⚠️ This {TYPES[rep.type]} contains code that the scan can't judge. I did not read or run "
-                     f"it. Read the files named in the safety line first. No Adopt button for this one. "
-                     f"If you still want it, run this yourself: {manual}")
-        lines.append("Nothing was installed.")
-    elif line:
-        lines.append("Adopt shows the clone command. I have NOT installed anything.")
-    elif rep.type in ("app", "unclear"):
-        lines.append("Read-only: no install button for this one. Nothing was installed.")
-    else:
-        lines.append("No install button: I'm not sure enough. Nothing was installed.")
-    lines.append("I ran it in an isolated folder; nothing was installed." if rep.ran
-                 else "I only read it; nothing was run or installed.")
+        lines += [f"⚠️ It contains code the scan can't judge: {', '.join(rep.code_paths)}. Read those first. No Adopt "
+                  f"button. If you still want it, run this yourself: {manual}", "Nothing was installed."]
+    elif not line:
+        lines += [f"No Adopt button: {rep.type_note or rep.safety_reason or 'I am not sure enough.'}",
+                  "Nothing was installed."]
     text = "\n".join(lines)
     return (text if len(text) <= MAX_TEXT else text[:MAX_TEXT - 1] + "…"), line
 
 
-def format_factcheck(verdict: Verdict, tail: str = "", saw: str = "") -> str:
-    """The short, separate fact-check message."""
-    lines = [plain(verdict.summary, 400) or "No summary."]
+def format_factcheck(verdict: Verdict, tail: str = "", saw: str = "", lead: str = "") -> str:
+    """The short message for a video with no report: no tool, or no repo could be found."""
+    lines = [lead] if lead else []
+    lines.append(plain_sentence(verdict.summary, 400) or "No summary.")
     if verdict.claims:
         lines += ["", "Was the video telling the truth?"]
-        for c in verdict.claims[:6]:
+        for c in verdict.claims[:3]:
             lines.append(f"{_ICONS.get(c.verdict, '❔')} {plain(c.text, 140)} ({c.verdict})")
         lines.append("Sources are what the AI cited, not proof.")
     if saw:

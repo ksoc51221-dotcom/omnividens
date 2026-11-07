@@ -282,14 +282,16 @@ Deno.test("adopt and skip callbacks", async () => {
   });
   const kb = t.calls.find((c) => c.body?.reply_markup)!.body.reply_markup.inline_keyboard[0];
   // deno-lint-ignore no-explicit-any
-  assertEq(kb.map((b: any) => b.callback_data), ["adopt:id1", "skip:id1"]);
+  assertEq(kb.map((b: any) => b.callback_data), ["skip:id1", "adopt:id1"]);
   const cb = (id: number, data: string) => ({
     update_id: id,
     callback_query: { id: "cq", from: { id: 42 }, data, message: { chat: { id: 42 } } },
   });
   await t.hook(cb(1, "adopt:id1"));
+  const before = t.sent().length;
   await t.hook(cb(2, "skip:id1"));
-  assertEq(t.sent().slice(-2), ["git clone -- https://github.com/o/r", "Skipped."]);
+  assertEq(t.sent().length, before); // Skip sends no message
+  assertEq(t.sent().at(-1), "Ready to adopt:\ngit clone -- https://github.com/o/r");
   assertEq(t.calls.filter((c) => c.url.endsWith("/answerCallbackQuery")).length, 2);
   t.done();
 });
@@ -549,14 +551,14 @@ Deno.test("report sends get their own buttons and obey the daily budget", async 
   assertEq((await t.api("/api/send", "POST", line("c"))).status, 429);
   // two reports -> two different ids, so one tap cannot touch the other
   const ids = t.calls.filter((c) => c.url.endsWith("/sendMessage")).map((c) =>
-    c.body.reply_markup.inline_keyboard[0][0].callback_data
+    c.body.reply_markup.inline_keyboard[0][1].callback_data
   );
   assertEq(ids, ["adopt:id1", "adopt:id2"]);
   await t.hook({
     update_id: 9,
     callback_query: { id: "q", from: { id: 42 }, data: "adopt:id2", message: { chat: { id: 42 } } },
   });
-  assertEq(t.sent().at(-1), "git clone -- https://github.com/o/b");
+  assertEq(t.sent().at(-1), "Ready to adopt:\ngit clone -- https://github.com/o/b");
   t.done();
 });
 
@@ -586,7 +588,10 @@ Deno.test("adopt note is shown above the clone line; ADOPT_RE is strict", async 
     update_id: 9,
     callback_query: { id: "q", from: { id: 42 }, data: "adopt:id1", message: { chat: { id: 42 } } },
   });
-  assertEq(t.sent().at(-1), `⚠️ code [31m here\nI have NOT installed anything. \n\n${line}`);
+  assertEq(
+    t.sent().at(-1),
+    `Ready to adopt:\n${line}\n\n⚠️ code [31m here\nI have NOT installed anything. `,
+  );
   for (
     const bad of [
       "git clone -- https://github.com/../r",
