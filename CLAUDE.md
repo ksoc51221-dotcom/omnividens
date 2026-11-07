@@ -2,7 +2,7 @@
 
 Telegram bot connected to the owner's own AI. Share a short video (TikTok or Instagram link, or an uploaded video; YouTube only through the optional Mac worker): Omnividens watches it (frames + transcript), finds any tool or skill it names, scans the repo without running it, and replies with a short summary and time estimate, then a report (token estimate, projects it fits, rating out of 10) with Skip and Adopt. A failed scan gets one short warning; a video with no tool gets a short fact-check. Typed instructions go through a Haiku router to the owner's Claude Code.
 
-Hackathon entry, deadline **7 Nov 2026**. Judging: 50% 10-min technical video, 40% GitHub repo, 10% surprise.
+Hackathon entry, deadline **7 Nov 2026**.
 
 Read `AGENTS.md` before changing code: ownership, worktrees, peer review and merge rules.
 Spec `docs/SPEC.md` · Architecture `docs/ARCHITECTURE.md` · Board `docs/TASKS.md` · Reviews `docs/reviews/` · Security `docs/SECURITY.md` · Demo `docs/DEMO.md`

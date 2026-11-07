@@ -6,7 +6,10 @@ build-backend = "hatchling.build"
 name = "reelay"
 version = "0.0.1"
 description = "Share a video to Telegram; your AI watches, fact-checks and safely trials what's in it."
+readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.11"
+keywords = ["telegram", "claude-code", "ai-agents", "security"]
 dependencies = [
     "anthropic",
     "python-telegram-bot>=21",
@@ -16,6 +19,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
+
+[project.urls]
+Homepage = "https://github.com/ksoc51221-dotcom/omnividens"
 
 [project.scripts]
 reelay = "reelay.installer.cli:main"

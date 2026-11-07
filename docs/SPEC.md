@@ -1,6 +1,20 @@
-# Omnividens — Spec (v0.1, draft for owner approval)
+# Omnividens — Original spec (v0.1, 28 Oct 2026)
 
-**Deadline:** 7 November 2026. Judged: 50% 10-min video, 40% GitHub repo, 10% surprise.
+> **Historical document.** This is the plan the project started from, kept as a record. What shipped, and how it differs (cloud path, scan-only repo checks), is in the [README](../README.md), [CLOUD-SPEC.md](CLOUD-SPEC.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## What became of it
+| Planned | Outcome |
+|---|---|
+| Telegram bot + one-time pairing | Shipped. Local mode pairs with a code; cloud mode checks the owner's Telegram ID |
+| Video watching (frames + transcript) | Shipped |
+| Fact-check with sources | Shipped |
+| Sandbox trial + report + Adopt/Skip | Cloud: scan-and-read only, Adopt prints a `git clone` line. Isolated trial: local mode only |
+| Haiku router for typed instructions | Shipped in local mode only |
+| 5-minute installer | Shipped for local mode (`reelay setup`) |
+| Personality quiz and vibe dial | Shipped in local mode |
+| Second AI adapter (Codex or Gemini) | Not built |
+| Sandbox: folder vs Docker | Decided: folder isolation (Docker is on the roadmap) |
+| Product name | Omnividens (package and CLI still `reelay`) |
 
 ## One-line pitch
 Share any short video to a Telegram bot; it watches it, fact-checks it against who you are, and safely tries anything useful in a sandbox before your AI tool adopts it.
@@ -29,8 +43,3 @@ Share any short video to a Telegram bot; it watches it, fact-checks it against w
 - Each user's bot reaches only their own machine (pairing).
 - Local-first: profile, history and keys stay on the user's machine.
 - Download failure → ask for a screen recording instead.
-
-## Open decisions (owner)
-- Sandbox: separate folder + restricted permissions (easy install) vs Docker (safer).
-- Second AI adapter: Codex or Gemini.
-- Final product name.

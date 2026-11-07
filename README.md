@@ -40,6 +40,14 @@ Tap **Adopt** and the bot replies `Ready to adopt:` with a strict `git clone` li
 | Repo only named in the video | Found by searching; the report says "check this is the one in the video" |
 | No tool in the video | "No skill or tool in this video." plus a short summary |
 
+## Where to look (60 seconds)
+
+- **The safety gate:** `apply_gate` in [`reelay/core/reports.py`](reelay/core/reports.py). Whether Adopt appears is decided by code; the model can only lower a verdict.
+- **The relay:** [`relay/app.ts`](relay/app.ts), the only part that holds the bot token and talks to Telegram.
+- **What the AI is told to do:** [`routine/PROMPT.md`](routine/PROMPT.md), hard rules first.
+- **What review caught:** [`docs/SECURITY.md`](docs/SECURITY.md) and [`docs/reviews/`](docs/reviews/README.md).
+- **All docs:** [`docs/README.md`](docs/README.md).
+
 ## Check it without setting anything up (2 minutes)
 
 The test suites need no network and no API key.

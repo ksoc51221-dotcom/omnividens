@@ -1,6 +1,6 @@
 # Demo script: 10 minutes (cloud path)
 
-Judging: this video is 50% of the grade and is technical. Show that every safety claim is computed by code and tested, not promised by a prompt.
+Goal: show that every safety claim is computed by code and tested, not promised by a prompt.
 
 **Every step is tagged. Verify the NOT YET LIVE ones before recording.**
 - ✅ **RAN LIVE**: TikTok end to end through relay and routine (4 Nov). Instagram reel, 84 s long, 109 s total (5 Nov). Both on the *older* report format (one fact-check, one report).
