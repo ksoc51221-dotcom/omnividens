@@ -219,11 +219,11 @@ export function makeHandler(deps: Deps): Handler {
     if (m[1] === "rpick" || m[1] === "rno") {
       return void await reportPick(chat, m[1], m[2], updateId, origin);
     }
-    if (m[1] === "skip") return void await say(chat, "Skipped.");
+    if (m[1] === "skip") return; // Skip ends it: no further message
     const stored = (await kv.get<string | { line: string; note?: string }>(["adopt", m[2]])).value;
     const line = typeof stored === "string" ? stored : stored?.line;
-    const note = typeof stored === "object" && stored?.note ? `${stored.note}\n\n` : "";
-    await say(chat, line ? note + line : "That suggestion expired.");
+    const note = typeof stored === "object" && stored?.note ? `\n\n${stored.note}` : "";
+    await say(chat, line ? `Ready to adopt:\n${line}${note}` : "That suggestion expired.");
   }
 
   // ---- /report <name>: top GitHub search match, confirmed with Yes/No before any run ----
@@ -844,8 +844,8 @@ export function makeHandler(deps: Deps): Handler {
           ? {
             reply_markup: {
               inline_keyboard: [[
-                { text: "Adopt", callback_data: `adopt:${id}` },
                 { text: "Skip", callback_data: `skip:${id}` },
+                { text: "Adopt", callback_data: `adopt:${id}` },
               ]],
             },
           }

@@ -40,10 +40,13 @@ def build(finds, profile: dict) -> str | None:
             continue
         name, what = plain(f.get("name"), 60), plain_sentence(f.get("what"), 160)
         if name:
-            out.append(f"• {name}: {what}" if what else f"• {name}")
+            out.append((name, what))
     if not out:
         return None
-    return "\n".join(out).removeprefix("• " if len(out) == 1 else "") + f"\nEstimated {minutes(profile, len(out))} min."
+    about = f"This test will take approximately {minutes(profile, len(out))} minutes"
+    if len(out) == 1:
+        return f"{out[0][1] or out[0][0] + '.'} {about}"
+    return "\n".join(f"• {n}: {w}" if w else f"• {n}" for n, w in out) + f"\n{about}"
 
 
 def run(workdir: str, relay_factory=Relay) -> int:

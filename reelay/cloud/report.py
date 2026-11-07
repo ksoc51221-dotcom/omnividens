@@ -203,7 +203,7 @@ def run(workdir: str, relay_factory=Relay, cloner=_hardened_clone) -> int:
                 sent += 1
             else:
                 relay.send(job.chat_id, _reports.format_factcheck(
-                    verdict, saw=saw, lead="No tool or repo in this video. Here's a quick fact-check:"))
+                    verdict, saw=saw, lead="No skill or tool in this video."))
                 sent += 1
         elif not reps:
             relay.send(job.chat_id, "I couldn't build a report for that repo. Nothing was installed.")
@@ -211,8 +211,6 @@ def run(workdir: str, relay_factory=Relay, cloner=_hardened_clone) -> int:
         done = 0
         for i, rep in enumerate(reps):
             text, line = _reports.format_report(rep)
-            if i == 0 and not repo_only and rep.safety != "NO":
-                text += "\n" + saw
             try:
                 relay.send(job.chat_id, text, line, report=True, adopt_note=_reports.adopt_note(rep))
                 sent, done = sent + 1, done + 1
