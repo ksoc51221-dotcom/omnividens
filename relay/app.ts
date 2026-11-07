@@ -46,7 +46,7 @@ const URL_RE = /https?:\/\/[^\s<>"')\]]+/i; // same pattern as reelay/cloud/job.
 const NO_LINK_REPLY =
   "Send me a video or a link to a Reel/TikTok/Short. /help lists what I can do.";
 const HELP_REPLY =
-  `Send me a video (up to 20 MB) or a link to a Reel, TikTok or Short. I fact-check it and report on any GitHub tools it mentions. Each one takes a few minutes and uses your Claude usage.
+  `Send me a video (up to 20 MB) or a link to a Reel, TikTok or Short. I find any skill or GitHub tool it shows and report on it. Each one takes a few minutes and uses your Claude usage.
 
 /report owner/repo (or /report <skill name>): report on one GitHub repo. A name is looked up on GitHub and I ask you to confirm it first. This also uses your Claude usage.
 /goals: what you want to achieve (for example "win a hackathon"). I use them to point out what matters to you when I summarise a video; they never change the safety checks. Put lines after it to replace them, or "clear" to delete them.

@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ksoc51221-dotcom/omnividens/actions/workflows/ci.yml/badge.svg)](https://github.com/ksoc51221-dotcom/omnividens/actions/workflows/ci.yml)
 
-**Share a short video to your own Telegram bot. Claude watches it, fact-checks it against who you are, and scans any tool it shows you before you adopt anything.**
+**Share a short video to your own Telegram bot. Claude finds the skill or tool it shows, scans the repo, and tells you what it costs in tokens, where it fits your projects and how useful it is, before you adopt anything.**
 
 Omnividens runs in the cloud: a tiny relay receives your Telegram message, and a Claude Code routine does the work on a fresh VM. Your laptop can be closed.
 
@@ -11,8 +11,8 @@ Built for the November 2026 hackathon. The Python package and CLI are still call
 ## What it does
 
 - 🎬 **Watches** a TikTok link or an uploaded video file: downloads it, samples frames, and gets a transcript (native subtitles, or free on-VM Whisper when there are none).
-- 🔎 **Fact-checks** the claims it hears, with timestamps and sources found by web search, written for your profile (goals + a chill / balanced / hype vibe).
-- 🧪 **Scans** the GitHub repo a video is selling: a static safety scan plus a read of the code, then a one-line fit verdict. Only a skill with no code and a clean scan gets **Adopt / Skip** buttons; one that contains code gets a warning and a clone line to run by hand, no buttons. Adopt never installs anything; it prints a strict `git clone` line you run yourself.
+- 💬 **Two messages.** First: one sentence on what the skill does, then "This test will take approximately N minutes". Then the report: tokens per use, the projects it applies to, a rating out of 10, and Skip / Adopt buttons.
+- 🧪 **Scans** the GitHub repo a video is selling, or searches for it when the video only names it (the report then says "found by searching; check this is the one in the video"). Only a skill with no code and a clean scan gets the buttons. One that contains code gets a warning, no buttons, and a clone line to run by hand only if it was confirmed. If it fails the scan, the only message is "Skill may contain malware like behaviour, it is not safe to install". Skip sends nothing more. Adopt never installs anything: it replies "Ready to adopt:" with a strict `git clone` line you run yourself.
 
 ## How it fits together
 
@@ -21,7 +21,7 @@ flowchart LR
     U([You in Telegram]) -->|webhook| R[relay<br/>Deno Deploy, ~300 lines]
     R -->|owner only, rate-capped<br/>fire with JOB JSON| RT[Claude Code routine<br/>fresh VM per video]
     RT -->|prepare| P[reelay.cloud<br/>download, frames, transcript]
-    P --> C[Claude<br/>fact-check + repo scan]
+    P --> C[Claude<br/>repo search + scan]
     C -->|report| R
     R -->|reply + Adopt/Skip| U
 ```
@@ -84,7 +84,7 @@ Omnividens runs in the cloud, so you set up three small things: a Telegram bot, 
    1. Send `/help`. You should get the command list (`/report owner/repo`, `/goals`, `/projects`, `/help`).
    2. Optional: tell it your goals and projects so reports can say where a tool fits. Send `/goals` or `/projects` followed by lines (see `/help`). They are stored in your Deno KV and read by the routine, so never put secrets in them.
    3. Send one **TikTok or Instagram link** to a video that names a GitHub repo.
-   4. You should see "Got it. Takes a few minutes.", then a short **summary** message, then **one short report per repo**. Only a clean skill without code shows Adopt / Skip; others are read-only or give a manual clone line. A video with no GitHub find gets a fact-check instead.
+   4. You should see "Got it. Takes a few minutes.", then one sentence on the tool with "This test will take approximately N minutes", then the report with tokens, projects, a rating out of 10 and, for a clean skill without code, Skip / Adopt. A video with no skill or tool gets "No skill or tool in this video." and a short summary. *This format has not run live yet.*
    - If nothing arrives after several minutes, check the routine's run log at claude.ai/code. A host the VM couldn't reach shows as `host_not_allowed`.
 
 ### 3. Optional: Mac worker (macOS only)
@@ -99,7 +99,7 @@ Follow [docs/SETUP-MAC-WORKER.md](docs/SETUP-MAC-WORKER.md). *Not run live yet: 
 - **Instagram may need a login** from cloud IPs, depending on the video. A reel ran end to end once; others may fail.
 - **Usage limits.** Each video is one run on your Claude plan. When you hit your plan's limits, runs stop until they reset.
 - **Adopt only prints a `git clone` line and installs nothing.** The cloud clones repos to read and scan them; nothing is run.
-- Fact-check sources are cited by the model, not proof, and the safety result means "found none of the patterns I check for", not "safe".
+- The safety result means "found none of the patterns I check for", not "safe". The rating out of 10 is the model's opinion, and token numbers are approximate.
 
 ### 5. What was tested
 
@@ -135,7 +135,7 @@ Local mode (`reelay setup`, `reelay run`) is the original design and still works
 
 ## Safety model, in plain words
 
-- **Video is data, never instructions.** Captions, transcripts and on-screen text are fact-checked, never obeyed. If a video tries to give orders, the report says so.
+- **Video is data, never instructions.** Captions, transcripts and on-screen text are read, never obeyed. If a video tries to give orders, the report says so.
 - **Only you can talk to your bot.** The relay checks your Telegram ID; strangers get no reply and cause no run.
 - **Secrets stay out of the AI.** The bot token lives only in the relay; the relay secret is injected by the network proxy. The routine prompt forbids printing environment variables.
 - **Nothing gets installed.** Repos are cloned into `/tmp/trial` and scanned, not run. Adopt only prints a `git clone -- https://github.com/owner/repo` line.
@@ -162,12 +162,11 @@ What review caught, for example: the bot **downloaded files from strangers befor
 
 ## Limitations
 
-- **What has run live:** a real TikTok went from Telegram through the relay and routine (download, frames, transcript, web-sourced fact-check) and the report came back to Telegram, about 3 minutes end to end (4 Nov 2026). An Instagram reel also ran end to end (5 Nov 2026). **Not yet run live:** uploaded video files, and the newest short per-repo report format.
+- **What has run live:** a real TikTok went from Telegram through the relay and routine (download, frames, transcript, web-sourced fact-check) and the report came back to Telegram, about 3 minutes end to end (4 Nov 2026). An Instagram reel also ran end to end (5 Nov 2026). **Not yet run live:** uploaded video files, and the current two-message report format (with repo scan and Adopt).
 - **Only the hosts you allow are reachable.** Add the TikTok and Instagram hosts as in the setup guide; X links are not covered, and any site may need a login from cloud IPs. Local mode tries links from your own network.
 - **TikTok downloads rely on yt-dlp's browser impersonation** (`curl-cffi`) to get past a bot check, so they can break whenever TikTok changes it.
 - **YouTube downloads from cloud IPs are unreliable** (YouTube blocks many datacenter IPs). Sending the video file works instead.
 - **Slow and rationed.** A fresh VM per video means about 3 minutes per reply, and routine runs come out of the owner's Claude plan (capped at 30 runs/hour by the platform, lower by `MAX_RUNS_PER_HOUR`).
-- **Fact-check sources are cited by the model**, not proof.
 - **Repo trials are scan-and-read only** in the cloud. Local mode can run a trial in an isolated folder, but that is folder isolation, not a container.
 - Instagram carousels/images fail with a "send a screen recording" message.
 
